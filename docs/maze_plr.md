@@ -2,10 +2,16 @@ This example implements several variations of curation-based UED methods. In par
 
 See the DR example for details about what this outputs, and how to run it.
 
+## Experimental teacher score
+
+Select `--score_function recent_learnability` to estimate a level's success probability from the completed episodes already collected by PLR. Repeated visits update the same per-level history. Old evidence loses half its weight every 256 curriculum rounds, measured when the level is revisited. With an effective count of four completed episodes, the priority is `4 * p * (1 - p)`. With fewer episodes, it is blended with a sigmoid-rescaled MaxMC score. This gives the buffer a useful ordering at cold start.
+
+The binary learnability term comes from [Rutherford et al. (2024)](https://arxiv.org/abs/2408.15099). The experimental variant adds per-level history, time decay and a low-evidence fallback. It uses the existing replay mix and requires no extra environment interactions for scoring.
+
 ## Arguments
 Name  | Description | Default
 -------------                   | ------------- | -------------
-`--score_function`              | The score function to use, `pvl` or `MaxMC`                                                                                                | MaxMC
+`--score_function`              | The score function to use, `pvl`, `MaxMC`, or `recent_learnability`                                                                           | MaxMC
 `--exploratory_grad_updates`    | If `True`, trains on random levels                                                                                                         | False
 `--level_buffer_capacity`       | The maximum number of levels in the buffer.                                                                                                | 4000
 `--replay_prob`                 | The probability of performing a `replay` step                                                                                              | 0.8

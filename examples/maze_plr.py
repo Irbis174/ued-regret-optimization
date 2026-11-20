@@ -17,6 +17,7 @@ from jaxued.environments.underspecified_env import EnvParams, EnvState, Observat
 from jaxued.linen import ResetRNN
 from jaxued.environments import Maze, MazeRenderer
 from jaxued.environments.maze import Level, make_level_generator, make_level_mutator_minimax
+from jaxued import learnability
 from jaxued.level_sampler import LevelSampler
 from jaxued.utils import compute_max_returns, max_mc, positive_value_loss
 from jaxued.wrappers import AutoReplayWrapper
@@ -448,7 +449,7 @@ def main(config=None, project="JAXUED_TEST"):
         for i, level_name in enumerate(config["eval_levels"]):
             frames, episode_length = stats["eval_animation"][0][:, i], stats["eval_animation"][1][i]
             frames = np.array(frames[:episode_length])
-            log_dict.update({f"animations/{level_name}": wandb.Video(frames, fps=4)})
+            log_dict.update({f"animations/{level_name}": wandb.Video(frames, fps=4, format="gif")})
         
         wandb.log(log_dict)
     
@@ -471,6 +472,7 @@ def main(config=None, project="JAXUED_TEST"):
         prioritization_params={"temperature": config["temperature"], "k": config['topk_k']},
         duplicate_check=config['buffer_duplicate_check'],
     )
+    use_recent_learnability = config["score_function"] == "recent_learnability"
     
     @jax.jit
     def create_train_state(rng) -> TrainState:
@@ -496,7 +498,8 @@ def main(config=None, project="JAXUED_TEST"):
             # optax.adam(learning_rate=config["lr"], eps=1e-5),
         )
         pholder_level = sample_random_level(jax.random.PRNGKey(0))
-        sampler = level_sampler.initialize(pholder_level, {"max_return": -jnp.inf})
+        level_extra = learnability.empty_history() if use_recent_learnability else {"max_return": -jnp.inf}
+        sampler = level_sampler.initialize(pholder_level, level_extra)
         pholder_level_batch = jax.tree_util.tree_map(lambda x: jnp.array([x]).repeat(config["num_train_envs"], axis=0), pholder_level)
         return TrainState.create(
             apply_fn=network.apply,
@@ -516,6 +519,20 @@ def main(config=None, project="JAXUED_TEST"):
         """
             This is the main training loop. It basically calls either `on_new_levels`, `on_replay_levels`, or `on_mutate_levels` at every step.
         """
+        rng, train_state = carry
+        round_index = jnp.asarray(
+            train_state.num_dr_updates + train_state.num_replay_updates + train_state.num_mutation_updates,
+            dtype=jnp.int32,
+        )
+
+        def insert_levels(sampler, levels, dones, rewards, values, advantages):
+            max_returns = compute_max_returns(dones, rewards)
+            if use_recent_learnability:
+                evidence = learnability.rollout_evidence(dones, rewards, values, max_returns)
+                return learnability.insert_batch(level_sampler, sampler, levels, evidence, round_index)
+            scores = compute_score(config, dones, values, max_returns, advantages)
+            return level_sampler.insert_batch(sampler, levels, scores, {"max_return": max_returns})[0]
+
         def on_new_levels(rng: chex.PRNGKey, train_state: TrainState):
             """
                 Samples new (randomly-generated) levels and evaluates the policy on these. It also then adds the levels to the level buffer if they have high-enough scores.
@@ -543,9 +560,7 @@ def main(config=None, project="JAXUED_TEST"):
                 config["num_steps"],
             )
             advantages, targets = compute_gae(config["gamma"], config["gae_lambda"], last_value, values, rewards, dones)
-            max_returns = compute_max_returns(dones, rewards)
-            scores = compute_score(config, dones, values, max_returns, advantages)
-            sampler, _ = level_sampler.insert_batch(sampler, new_levels, scores, {"max_return": max_returns})
+            sampler = insert_levels(sampler, new_levels, dones, rewards, values, advantages)
             
             # Update: train_state only modified if exploratory_grad_updates is on
             (rng, train_state), losses = update_actor_critic_rnn(
@@ -601,9 +616,14 @@ def main(config=None, project="JAXUED_TEST"):
                 config["num_steps"],
             )
             advantages, targets = compute_gae(config["gamma"], config["gae_lambda"], last_value, values, rewards, dones)
-            max_returns = jnp.maximum(level_sampler.get_levels_extra(sampler, level_inds)["max_return"], compute_max_returns(dones, rewards))
-            scores = compute_score(config, dones, values, max_returns, advantages)
-            sampler = level_sampler.update_batch(sampler, level_inds, scores, {"max_return": max_returns})
+            max_returns = compute_max_returns(dones, rewards)
+            if use_recent_learnability:
+                evidence = learnability.rollout_evidence(dones, rewards, values, max_returns)
+                sampler = learnability.update_batch(level_sampler, sampler, level_inds, evidence, round_index)
+            else:
+                max_returns = jnp.maximum(level_sampler.get_levels_extra(sampler, level_inds)["max_return"], max_returns)
+                scores = compute_score(config, dones, values, max_returns, advantages)
+                sampler = level_sampler.update_batch(sampler, level_inds, scores, {"max_return": max_returns})
             
             # Update the policy using trajectories collected from replay levels
             (rng, train_state), losses = update_actor_critic_rnn(
@@ -663,9 +683,7 @@ def main(config=None, project="JAXUED_TEST"):
                 config["num_steps"],
             )
             advantages, targets = compute_gae(config["gamma"], config["gae_lambda"], last_value, values, rewards, dones)
-            max_returns = compute_max_returns(dones, rewards)
-            scores = compute_score(config, dones, values, max_returns, advantages)
-            sampler, _ = level_sampler.insert_batch(sampler, child_levels, scores, {"max_return": max_returns})
+            sampler = insert_levels(sampler, child_levels, dones, rewards, values, advantages)
             
             # Update: train_state only modified if exploratory_grad_updates is on
             (rng, train_state), losses = update_actor_critic_rnn(
@@ -696,7 +714,6 @@ def main(config=None, project="JAXUED_TEST"):
             )
             return (rng, train_state), metrics
     
-        rng, train_state = carry
         rng, rng_replay = jax.random.split(rng)
         
         # The train step makes a decision on which branch to take, either on_new, on_replay or on_mutate.
@@ -872,7 +889,7 @@ if __name__=="__main__":
     group.add_argument("--entropy_coeff", type=float, default=1e-3)
     group.add_argument("--critic_coeff", type=float, default=0.5)
     # === PLR ===
-    group.add_argument("--score_function", type=str, default="MaxMC", choices=["MaxMC", "pvl"])
+    group.add_argument("--score_function", type=str, default="MaxMC", choices=["MaxMC", "pvl", "recent_learnability"])
     group.add_argument("--exploratory_grad_updates", action=argparse.BooleanOptionalAction, default=False)
     group.add_argument("--level_buffer_capacity", type=int, default=4000)
     group.add_argument("--replay_prob", type=float, default=0.8)

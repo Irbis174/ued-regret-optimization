@@ -162,3 +162,9 @@ cython_debug/
 wandb
 checkpoints
 results
+
+# Local Markdown notes and experiment reports
+*.md
+!README.md
+
+tbank_reference/
