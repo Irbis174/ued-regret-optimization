@@ -4,6 +4,7 @@ import jax
 import jax.numpy as jnp
 
 from jaxued.environments.underspecified_env import Level
+from jaxued.teacher_experiments import capped_replay_weights, frontier_mask
 
 Prioritization = Literal["rank", "topk"]
 
@@ -47,6 +48,8 @@ class LevelSampler:
         prioritization: Prioritization = "rank",
         prioritization_params: dict = None,
         duplicate_check: bool = False,
+        replay_max_copies: int = 0,
+        replay_preserve_frontier_mass: bool = False,
     ):
         self.capacity = capacity
         self.replay_prob = replay_prob
@@ -55,6 +58,10 @@ class LevelSampler:
         self.prioritization = prioritization
         self.prioritization_params = prioritization_params
         self.duplicate_check = duplicate_check
+        self.replay_max_copies = replay_max_copies
+        self.replay_preserve_frontier_mass = replay_preserve_frontier_mass
+        if replay_max_copies < 0:
+            raise ValueError("replay_max_copies must be nonnegative")
         
         if prioritization_params is None:
             if prioritization == "rank":
@@ -105,7 +112,8 @@ class LevelSampler:
             bool: 
         """
         proportion_filled = self._proportion_filled(sampler)
-        return (proportion_filled >= self.minimum_fill_ratio) & (jax.random.uniform(rng) < self.replay_prob)
+        decision = (proportion_filled >= self.minimum_fill_ratio) & (jax.random.uniform(rng) < self.replay_prob)
+        return (decision & (sampler["size"] > 0)) if self.replay_max_copies else decision
     
     def sample_replay_level(self, sampler: Sampler, rng: chex.PRNGKey) -> Tuple[Sampler, Tuple[int, Level]]:
         """
@@ -120,13 +128,15 @@ class LevelSampler:
         """
         weights = self.level_weights(sampler)
         idx = jax.random.choice(rng, self.capacity, p=weights)
+        return self._record_replay(sampler, idx), (idx, self.get_levels(sampler, idx))
+
+    def _record_replay(self, sampler: Sampler, idx: int) -> Sampler:
         new_episode_count = sampler["episode_count"] + 1
-        sampler = {
+        return {
             **sampler,
             "timestamps": sampler["timestamps"].at[idx].set(new_episode_count),
             "episode_count": new_episode_count,
         }
-        return sampler, (idx, jax.tree_util.tree_map(lambda x: x[idx], sampler["levels"]))
     
     def sample_replay_levels(self, sampler: Sampler, rng: chex.PRNGKey, num: int) -> Tuple[Sampler, Tuple[chex.Array, Level]]:
         """
@@ -140,7 +150,36 @@ class LevelSampler:
         Returns:
             Tuple[Sampler, Tuple[chex.Array, Level]]: The updated sampler, an array of indices, and multiple levels.
         """
-        return jax.lax.scan(self.sample_replay_level, sampler, jax.random.split(rng, num), length=num)
+        keys = jax.random.split(rng, num)
+        if not self.replay_max_copies:
+            return jax.lax.scan(self.sample_replay_level, sampler, keys, length=num)
+
+        slots = jnp.arange(self.capacity)
+        active = slots < sampler["size"]
+        frontier = frontier_mask(sampler)
+        can_cap = sampler["size"] * self.replay_max_copies >= num
+
+        def sample_active():
+            def select(carry, key):
+                sampler, counts = carry
+                eligible = active & ((counts < self.replay_max_copies) | ~can_cap)
+                probs = capped_replay_weights(
+                    self.level_weights(sampler), frontier, eligible,
+                    preserve_frontier_mass=self.replay_preserve_frontier_mass,
+                )
+                idx = jax.random.choice(key, self.capacity, p=probs).astype(jnp.int32)
+                return (self._record_replay(sampler, idx), counts.at[idx].add(1)), idx
+
+            (updated, _), indices = jax.lax.scan(select, (sampler, jnp.zeros_like(slots)), keys)
+            return updated, (indices, self.get_levels(updated, indices))
+
+        def empty():
+            # The branch decision prevents empty replay during training. A direct
+            # request has no index to return and must leave timestamps untouched.
+            indices = jnp.full((num,), -1, dtype=jnp.int32)
+            return sampler, (indices, self.get_levels(sampler, jnp.zeros_like(indices)))
+
+        return jax.lax.cond(sampler["size"] > 0, sample_active, empty)
     
     def insert(self, sampler: Sampler, level: Level, score: float, level_extra: dict=None) -> Tuple[Sampler, int]:
         """

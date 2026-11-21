@@ -1,0 +1,90 @@
+[
+  {
+    "run": "pace_accel",
+    "variant": "ACCEL",
+    "score": "pace_pg",
+    "result": "OK",
+    "solve_rate_percent": 0.0,
+    "last_eval_update": 10,
+    "eval_count": 1,
+    "seconds": "119",
+    "log_file": "/mnt/f/тз тбанк/jaxued/logs/ued_suite_smoke_20261121_225424/pace_accel.log"
+  },
+  {
+    "run": "pace_plr",
+    "variant": "PLR",
+    "score": "pace_pg",
+    "result": "OK",
+    "solve_rate_percent": 0.0,
+    "last_eval_update": 10,
+    "eval_count": 1,
+    "seconds": "120",
+    "log_file": "/mnt/f/тз тбанк/jaxued/logs/ued_suite_smoke_20261121_225424/pace_plr.log"
+  },
+  {
+    "run": "accel_maxmc",
+    "variant": "ACCEL",
+    "score": "MaxMC",
+    "result": "OK",
+    "solve_rate_percent": 0.0,
+    "last_eval_update": 10,
+    "eval_count": 1,
+    "seconds": "109",
+    "log_file": "/mnt/f/тз тбанк/jaxued/logs/ued_suite_smoke_20261121_225424/accel_maxmc.log"
+  },
+  {
+    "run": "accel_pvl",
+    "variant": "ACCEL",
+    "score": "pvl",
+    "result": "OK",
+    "solve_rate_percent": 0.0,
+    "last_eval_update": 10,
+    "eval_count": 1,
+    "seconds": "105",
+    "log_file": "/mnt/f/тз тбанк/jaxued/logs/ued_suite_smoke_20261121_225424/accel_pvl.log"
+  },
+  {
+    "run": "accel_recent_learnability",
+    "variant": "ACCEL",
+    "score": "recent_learnability",
+    "result": "OK",
+    "solve_rate_percent": 0.0,
+    "last_eval_update": 10,
+    "eval_count": 1,
+    "seconds": "106",
+    "log_file": "/mnt/f/тз тбанк/jaxued/logs/ued_suite_smoke_20261121_225424/accel_recent_learnability.log"
+  },
+  {
+    "run": "accel_hybrid",
+    "variant": "ACCEL",
+    "score": "hybrid",
+    "result": "OK",
+    "solve_rate_percent": 0.0,
+    "last_eval_update": 10,
+    "eval_count": 1,
+    "seconds": "104",
+    "log_file": "/mnt/f/тз тбанк/jaxued/logs/ued_suite_smoke_20261121_225424/accel_hybrid.log"
+  },
+  {
+    "run": "accel_history_aware_regret",
+    "variant": "ACCEL",
+    "score": "history_aware_regret",
+    "result": "OK",
+    "solve_rate_percent": 0.0,
+    "last_eval_update": 10,
+    "eval_count": 1,
+    "seconds": "104",
+    "log_file": "/mnt/f/тз тбанк/jaxued/logs/ued_suite_smoke_20261121_225424/accel_history_aware_regret.log"
+  },
+  {
+    "run": "plr_maxmc",
+    "variant": "PLR",
+    "score": "MaxMC",
+    "result": "OK",
+    "solve_rate_percent": 0.0,
+    "last_eval_update": 10,
+    "eval_count": 1,
+    "seconds": "100",
+    "log_file": "/mnt/f/тз тбанк/jaxued/logs/ued_suite_smoke_20261121_225424/plr_maxmc.log"
+  }
+]

@@ -1,0 +1,57 @@
+[
+  {
+    "run": "pace_accel",
+    "variant": "ACCEL",
+    "score": "pace_pg",
+    "result": "OK",
+    "solve_rate_percent": 10.0,
+    "last_eval_update": 2000,
+    "eval_count": 8,
+    "seconds": "1306",
+    "log_file": "/mnt/f/тз тбанк/jaxued/logs/ued_5methods_2000_20261121_231959/pace_accel.log"
+  },
+  {
+    "run": "pace_plr",
+    "variant": "PLR",
+    "score": "pace_pg",
+    "result": "OK",
+    "solve_rate_percent": 2.5,
+    "last_eval_update": 2000,
+    "eval_count": 8,
+    "seconds": "1313",
+    "log_file": "/mnt/f/тз тбанк/jaxued/logs/ued_5methods_2000_20261121_231959/pace_plr.log"
+  },
+  {
+    "run": "accel_pvl",
+    "variant": "ACCEL",
+    "score": "pvl",
+    "result": "OK",
+    "solve_rate_percent": 0.0,
+    "last_eval_update": 2000,
+    "eval_count": 8,
+    "seconds": "556",
+    "log_file": "/mnt/f/тз тбанк/jaxued/logs/ued_5methods_2000_20261121_231959/accel_pvl.log"
+  },
+  {
+    "run": "accel_recent_learnability",
+    "variant": "ACCEL",
+    "score": "recent_learnability",
+    "result": "OK",
+    "solve_rate_percent": 7.5,
+    "last_eval_update": 2000,
+    "eval_count": 8,
+    "seconds": "568",
+    "log_file": "/mnt/f/тз тбанк/jaxued/logs/ued_5methods_2000_20261121_231959/accel_recent_learnability.log"
+  },
+  {
+    "run": "accel_hybrid",
+    "variant": "ACCEL",
+    "score": "hybrid",
+    "result": "OK",
+    "solve_rate_percent": 5.0,
+    "last_eval_update": 2000,
+    "eval_count": 8,
+    "seconds": "777",
+    "log_file": "/mnt/f/тз тбанк/jaxued/logs/ued_5methods_2000_20261121_231959/accel_hybrid.log"
+  }
+]

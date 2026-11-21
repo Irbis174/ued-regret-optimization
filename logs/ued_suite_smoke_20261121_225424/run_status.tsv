@@ -1,0 +1,9 @@
+run	score	variant	status	exit_code	seconds
+pace_accel	pace_pg	ACCEL	OK	0	119
+pace_plr	pace_pg	PLR	OK	0	120
+accel_maxmc	MaxMC	ACCEL	OK	0	109
+accel_pvl	pvl	ACCEL	OK	0	105
+accel_recent_learnability	recent_learnability	ACCEL	OK	0	106
+accel_hybrid	hybrid	ACCEL	OK	0	104
+accel_history_aware_regret	history_aware_regret	ACCEL	OK	0	104
+plr_maxmc	MaxMC	PLR	OK	0	100

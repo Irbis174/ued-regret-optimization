@@ -1,0 +1,9 @@
+﻿run,variant,score,result,solve_rate_percent,last_eval_update,eval_count,seconds,log_file
+pace_accel,ACCEL,pace_pg,OK,0.0,10,1,119,/mnt/f/тз тбанк/jaxued/logs/ued_suite_smoke_20261121_225424/pace_accel.log
+pace_plr,PLR,pace_pg,OK,0.0,10,1,120,/mnt/f/тз тбанк/jaxued/logs/ued_suite_smoke_20261121_225424/pace_plr.log
+accel_maxmc,ACCEL,MaxMC,OK,0.0,10,1,109,/mnt/f/тз тбанк/jaxued/logs/ued_suite_smoke_20261121_225424/accel_maxmc.log
+accel_pvl,ACCEL,pvl,OK,0.0,10,1,105,/mnt/f/тз тбанк/jaxued/logs/ued_suite_smoke_20261121_225424/accel_pvl.log
+accel_recent_learnability,ACCEL,recent_learnability,OK,0.0,10,1,106,/mnt/f/тз тбанк/jaxued/logs/ued_suite_smoke_20261121_225424/accel_recent_learnability.log
+accel_hybrid,ACCEL,hybrid,OK,0.0,10,1,104,/mnt/f/тз тбанк/jaxued/logs/ued_suite_smoke_20261121_225424/accel_hybrid.log
+accel_history_aware_regret,ACCEL,history_aware_regret,OK,0.0,10,1,104,/mnt/f/тз тбанк/jaxued/logs/ued_suite_smoke_20261121_225424/accel_history_aware_regret.log
+plr_maxmc,PLR,MaxMC,OK,0.0,10,1,100,/mnt/f/тз тбанк/jaxued/logs/ued_suite_smoke_20261121_225424/plr_maxmc.log

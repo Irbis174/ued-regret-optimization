@@ -1,0 +1,6 @@
+﻿run,variant,score,result,solve_rate_percent,last_eval_update,eval_count,seconds,log_file
+pace_accel,ACCEL,pace_pg,OK,10.0,2000,8,1306,/mnt/f/тз тбанк/jaxued/logs/ued_5methods_2000_20261121_231959/pace_accel.log
+pace_plr,PLR,pace_pg,OK,2.5,2000,8,1313,/mnt/f/тз тбанк/jaxued/logs/ued_5methods_2000_20261121_231959/pace_plr.log
+accel_pvl,ACCEL,pvl,OK,0.0,2000,8,556,/mnt/f/тз тбанк/jaxued/logs/ued_5methods_2000_20261121_231959/accel_pvl.log
+accel_recent_learnability,ACCEL,recent_learnability,OK,7.5,2000,8,568,/mnt/f/тз тбанк/jaxued/logs/ued_5methods_2000_20261121_231959/accel_recent_learnability.log
+accel_hybrid,ACCEL,hybrid,OK,5.0,2000,8,777,/mnt/f/тз тбанк/jaxued/logs/ued_5methods_2000_20261121_231959/accel_hybrid.log
