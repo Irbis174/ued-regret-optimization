@@ -1,30 +1,43 @@
-import os
 import json
 import time
 from typing import Sequence, Tuple
 import numpy as np
 import jax
 import jax.numpy as jnp
-import optax
+from flax import core, struct
 from flax.training.train_state import TrainState as BaseTrainState
 import flax.linen as nn
 from flax.linen.initializers import constant, orthogonal
+import optax
 import distrax
+import os
 import orbax.checkpoint as ocp
 import wandb
 from jaxued.environments.underspecified_env import EnvParams, EnvState, Observation, UnderspecifiedEnv
 from jaxued.linen import ResetRNN
 from jaxued.environments import Maze, MazeRenderer
-from jaxued.environments.maze import Level, make_level_generator
-from jaxued.utils import max_mc, positive_value_loss
-from jaxued.wrappers import AutoResetWrapper
+from jaxued.environments.maze import Level, make_level_generator, make_level_mutator_minimax
+from jaxued import learnability
+from jaxued.level_sampler import LevelSampler
+from jaxued.utils import compute_max_returns, max_mc, positive_value_loss
+from jaxued.wrappers import AutoReplayWrapper
 import chex
+from enum import IntEnum
+
+class UpdateState(IntEnum):
+    DR = 0
+    REPLAY = 1
 
 class TrainState(BaseTrainState):
-    update_count: int
-    last_hstate: chex.ArrayTree
-    last_obs: chex.ArrayTree
-    last_env_state: chex.ArrayTree
+    sampler: core.FrozenDict[str, chex.ArrayTree] = struct.field(pytree_node=True)
+    update_state: UpdateState = struct.field(pytree_node=True)
+    # === Below is used for logging ===
+    num_dr_updates: int
+    num_replay_updates: int
+    num_mutation_updates: int
+    dr_last_level_batch: chex.ArrayTree = struct.field(pytree_node=True)
+    replay_last_level_batch: chex.ArrayTree = struct.field(pytree_node=True)
+    mutation_last_level_batch: chex.ArrayTree = struct.field(pytree_node=True)
 
 # region PPO helper functions
 def compute_gae(
@@ -333,7 +346,7 @@ def setup_checkpointing(config: dict, train_state: TrainState, env: Underspecifi
     # save the config
     with open(os.path.join(overall_save_dir, 'config.json'), 'w+') as f:
         f.write(json.dumps(config.as_dict(), indent=True))
-
+    
     checkpoint_manager = ocp.CheckpointManager(
         os.path.join(overall_save_dir, 'models'),
         options=ocp.CheckpointManagerOptions(
@@ -344,6 +357,36 @@ def setup_checkpointing(config: dict, train_state: TrainState, env: Underspecifi
     return checkpoint_manager
 #endregion
 
+def train_state_to_log_dict(train_state: TrainState, level_sampler: LevelSampler) -> dict:
+    """To prevent the entire (large) train_state to be copied to the CPU when doing logging, this function returns all of the important information in a dictionary format.
+
+        Anything in the `log` key will be logged to wandb.
+    
+    Args:
+        train_state (TrainState): 
+        level_sampler (LevelSampler): 
+
+    Returns:
+        dict: 
+    """
+    sampler = train_state.sampler
+    idx = jnp.arange(level_sampler.capacity) < sampler["size"]
+    s = jnp.maximum(idx.sum(), 1)
+    return {
+        "log":{
+            "level_sampler/size": sampler["size"],
+            "level_sampler/episode_count": sampler["episode_count"],
+            "level_sampler/max_score": sampler["scores"].max(),
+            "level_sampler/weighted_score": (sampler["scores"] * level_sampler.level_weights(sampler)).sum(),
+            "level_sampler/mean_score": (sampler["scores"] * idx).sum() / s,
+        },
+        "info": {
+            "num_dr_updates": train_state.num_dr_updates,
+            "num_replay_updates": train_state.num_replay_updates,
+            "num_mutation_updates": train_state.num_mutation_updates,
+        }
+    }
+
 def compute_score(config, dones, values, max_returns, advantages):
     if config['score_function'] == "MaxMC":
         return max_mc(dones, values, max_returns)
@@ -353,7 +396,14 @@ def compute_score(config, dones, values, max_returns, advantages):
         raise ValueError(f"Unknown score function: {config['score_function']}")
 
 def main(config=None, project="JAXUED_TEST"):
-    run = wandb.init(config=config, project=project, group=config["group_name"], tags=["DR",])
+    tags = []
+    if not config["exploratory_grad_updates"]:
+        tags.append("robust")
+    if config["use_accel"]:
+        tags.append("ACCEL")
+    else:
+        tags.append("PLR")
+    run = wandb.init(config=config, project=project, group=config["run_name"], tags=tags)
     config = wandb.config
     
     wandb.define_metric("num_updates")
@@ -364,7 +414,7 @@ def main(config=None, project="JAXUED_TEST"):
     wandb.define_metric("return/*", step_metric="num_updates")
     wandb.define_metric("eval_ep_lengths/*", step_metric="num_updates")
 
-    def log_eval(stats):
+    def log_eval(stats, train_state_info):
         print(f"Logging update: {stats['update_count']}")
         
         # generic stats
@@ -384,20 +434,22 @@ def main(config=None, project="JAXUED_TEST"):
         log_dict.update({"return/mean": returns.mean()})
         log_dict.update({"eval_ep_lengths/mean": stats['eval_ep_lengths'].mean()})
         
-        # training loss
-        loss, (critic_loss, actor_loss, entropy) = stats["losses"]
-        log_dict.update({
-            "agent/loss": loss,
-            "agent/critic_loss": critic_loss,
-            "agent/actor_loss": actor_loss,
-            "agent/entropy": entropy,
-        })
+        # level sampler
+        log_dict.update(train_state_info["log"])
+
+        # images
+        log_dict.update({"images/highest_scoring_level": wandb.Image(np.array(stats["highest_scoring_level"]), caption="Highest scoring level")})
+        log_dict.update({"images/highest_weighted_level": wandb.Image(np.array(stats["highest_weighted_level"]), caption="Highest weighted level")})
+
+        for s in ['dr', 'replay', 'mutation']:
+            if train_state_info['info'][f'num_{s}_updates'] > 0:
+                log_dict.update({f"images/{s}_levels": [wandb.Image(np.array(image)) for image in stats[f"{s}_levels"]]})
 
         # animations
         for i, level_name in enumerate(config["eval_levels"]):
             frames, episode_length = stats["eval_animation"][0][:, i], stats["eval_animation"][1][i]
             frames = np.array(frames[:episode_length])
-            log_dict.update({f"animations/{level_name}": wandb.Video(frames, fps=4)})
+            log_dict.update({f"animations/{level_name}": wandb.Video(frames, fps=4, format="gif")})
         
         wandb.log(log_dict)
     
@@ -406,8 +458,21 @@ def main(config=None, project="JAXUED_TEST"):
     eval_env = env
     sample_random_level = make_level_generator(env.max_height, env.max_width, config["n_walls"])
     env_renderer = MazeRenderer(env, tile_size=8)
-    env = AutoResetWrapper(env, sample_random_level)
+    env = AutoReplayWrapper(env)
     env_params = env.default_params
+    mutate_level = make_level_mutator_minimax(100)
+
+    # And the level sampler    
+    level_sampler = LevelSampler(
+        capacity=config["level_buffer_capacity"],
+        replay_prob=config["replay_prob"],
+        staleness_coeff=config["staleness_coeff"],
+        minimum_fill_ratio=config["minimum_fill_ratio"],
+        prioritization=config["prioritization"],
+        prioritization_params={"temperature": config["temperature"], "k": config['topk_k']},
+        duplicate_check=config['buffer_duplicate_check'],
+    )
+    use_recent_learnability = config["score_function"] == "recent_learnability"
     
     @jax.jit
     def create_train_state(rng) -> TrainState:
@@ -426,77 +491,248 @@ def main(config=None, project="JAXUED_TEST"):
         )
         init_x = (obs, jnp.zeros((256, config["num_train_envs"])))
         network = ActorCritic(env.action_space(env_params).n)
-        rng, _rng = jax.random.split(rng)
-        network_params = network.init(_rng, init_x, ActorCritic.initialize_carry((config["num_train_envs"],)))
+        network_params = network.init(rng, init_x, ActorCritic.initialize_carry((config["num_train_envs"],)))
         tx = optax.chain(
             optax.clip_by_global_norm(config["max_grad_norm"]),
             optax.adam(learning_rate=linear_schedule, eps=1e-5),
             # optax.adam(learning_rate=config["lr"], eps=1e-5),
         )
-    
-        rng_levels, rng_reset = jax.random.split(rng)
-        new_levels = jax.vmap(sample_random_level)(jax.random.split(rng_levels, config["num_train_envs"]))
-        init_obs, init_env_state = jax.vmap(env.reset_to_level, in_axes=(0, 0, None))(jax.random.split(rng_reset, config["num_train_envs"]), new_levels, env_params)
-        
+        pholder_level = sample_random_level(jax.random.PRNGKey(0))
+        level_extra = learnability.empty_history() if use_recent_learnability else {"max_return": -jnp.inf}
+        sampler = level_sampler.initialize(pholder_level, level_extra)
+        pholder_level_batch = jax.tree_util.tree_map(lambda x: jnp.array([x]).repeat(config["num_train_envs"], axis=0), pholder_level)
         return TrainState.create(
             apply_fn=network.apply,
             params=network_params,
             tx=tx,
-            update_count=0,
-            last_hstate=ActorCritic.initialize_carry((config["num_train_envs"],)),
-            last_obs=init_obs,
-            last_env_state=init_env_state,
+            sampler=sampler,
+            update_state=0,
+            num_dr_updates=0,
+            num_replay_updates=0,
+            num_mutation_updates=0,
+            dr_last_level_batch=pholder_level_batch,
+            replay_last_level_batch=pholder_level_batch,
+            mutation_last_level_batch=pholder_level_batch,
         )
 
     def train_step(carry: Tuple[chex.PRNGKey, TrainState], _):
         """
-            Samples new (randomly-generated) levels and train on them
+            This is the main training loop. It basically calls either `on_new_levels`, `on_replay_levels`, or `on_mutate_levels` at every step.
         """
         rng, train_state = carry
+        round_index = jnp.asarray(
+            train_state.num_dr_updates + train_state.num_replay_updates + train_state.num_mutation_updates,
+            dtype=jnp.int32,
+        )
+
+        def insert_levels(sampler, levels, dones, rewards, values, advantages):
+            max_returns = compute_max_returns(dones, rewards)
+            if use_recent_learnability:
+                evidence = learnability.rollout_evidence(dones, rewards, values, max_returns)
+                return learnability.insert_batch(level_sampler, sampler, levels, evidence, round_index)
+            scores = compute_score(config, dones, values, max_returns, advantages)
+            return level_sampler.insert_batch(sampler, levels, scores, {"max_return": max_returns})[0]
+
+        def on_new_levels(rng: chex.PRNGKey, train_state: TrainState):
+            """
+                Samples new (randomly-generated) levels and evaluates the policy on these. It also then adds the levels to the level buffer if they have high-enough scores.
+                The agent is updated on these trajectories iff `config["exploratory_grad_updates"]` is True.
+            """
+            sampler = train_state.sampler
+            
+            # Reset
+            rng, rng_levels, rng_reset = jax.random.split(rng, 3)
+            new_levels = jax.vmap(sample_random_level)(jax.random.split(rng_levels, config["num_train_envs"]))
+            init_obs, init_env_state = jax.vmap(env.reset_to_level, in_axes=(0, 0, None))(jax.random.split(rng_reset, config["num_train_envs"]), new_levels, env_params)
+            # Rollout
+            (
+                (rng, train_state, hstate, last_obs, last_env_state, last_value),
+                (obs, actions, rewards, dones, log_probs, values, info),
+            ) = sample_trajectories_rnn(
+                rng,
+                env,
+                env_params,
+                train_state,
+                ActorCritic.initialize_carry((config["num_train_envs"],)),
+                init_obs,
+                init_env_state,
+                config["num_train_envs"],
+                config["num_steps"],
+            )
+            advantages, targets = compute_gae(config["gamma"], config["gae_lambda"], last_value, values, rewards, dones)
+            sampler = insert_levels(sampler, new_levels, dones, rewards, values, advantages)
+            
+            # Update: train_state only modified if exploratory_grad_updates is on
+            (rng, train_state), losses = update_actor_critic_rnn(
+                rng,
+                train_state,
+                ActorCritic.initialize_carry((config["num_train_envs"],)),
+                (obs, actions, dones, log_probs, values, targets, advantages),
+                config["num_train_envs"],
+                config["num_steps"],
+                config["num_minibatches"],
+                config["epoch_ppo"],
+                config["clip_eps"],
+                config["entropy_coeff"],
+                config["critic_coeff"],
+                update_grad=config["exploratory_grad_updates"],
+            )
+            
+            metrics = {
+                "losses": jax.tree_util.tree_map(lambda x: x.mean(), losses),
+                "mean_num_blocks": new_levels.wall_map.sum() / config["num_train_envs"],
+            }
+            
+            train_state = train_state.replace(
+                sampler=sampler,
+                update_state=UpdateState.DR,
+                num_dr_updates=train_state.num_dr_updates + 1,
+                dr_last_level_batch=new_levels,
+            )
+            return (rng, train_state), metrics
+        
+        def on_replay_levels(rng: chex.PRNGKey, train_state: TrainState):
+            """
+                This samples levels from the level buffer, and updates the policy on them.
+            """
+            sampler = train_state.sampler
+            
+            # Collect trajectories on replay levels
+            rng, rng_levels, rng_reset = jax.random.split(rng, 3)
+            sampler, (level_inds, levels) = level_sampler.sample_replay_levels(sampler, rng_levels, config["num_train_envs"])
+            init_obs, init_env_state = jax.vmap(env.reset_to_level, in_axes=(0, 0, None))(jax.random.split(rng_reset, config["num_train_envs"]), levels, env_params)
+            (
+                (rng, train_state, hstate, last_obs, last_env_state, last_value),
+                (obs, actions, rewards, dones, log_probs, values, info),
+            ) = sample_trajectories_rnn(
+                rng,
+                env,
+                env_params,
+                train_state,
+                ActorCritic.initialize_carry((config["num_train_envs"],)),
+                init_obs,
+                init_env_state,
+                config["num_train_envs"],
+                config["num_steps"],
+            )
+            advantages, targets = compute_gae(config["gamma"], config["gae_lambda"], last_value, values, rewards, dones)
+            max_returns = compute_max_returns(dones, rewards)
+            if use_recent_learnability:
+                evidence = learnability.rollout_evidence(dones, rewards, values, max_returns)
+                sampler = learnability.update_batch(level_sampler, sampler, level_inds, evidence, round_index)
+            else:
+                max_returns = jnp.maximum(level_sampler.get_levels_extra(sampler, level_inds)["max_return"], max_returns)
+                scores = compute_score(config, dones, values, max_returns, advantages)
+                sampler = level_sampler.update_batch(sampler, level_inds, scores, {"max_return": max_returns})
+            
+            # Update the policy using trajectories collected from replay levels
+            (rng, train_state), losses = update_actor_critic_rnn(
+                rng,
+                train_state,
+                ActorCritic.initialize_carry((config["num_train_envs"],)),
+                (obs, actions, dones, log_probs, values, targets, advantages),
+                config["num_train_envs"],
+                config["num_steps"],
+                config["num_minibatches"],
+                config["epoch_ppo"],
+                config["clip_eps"],
+                config["entropy_coeff"],
+                config["critic_coeff"],
+                update_grad=True,
+            )
+                            
+            metrics = {
+                "losses": jax.tree_util.tree_map(lambda x: x.mean(), losses),
+                "mean_num_blocks": levels.wall_map.sum() / config["num_train_envs"],
+            }
+            
+            train_state = train_state.replace(
+                sampler=sampler,
+                update_state=UpdateState.REPLAY,
+                num_replay_updates=train_state.num_replay_updates + 1,
+                replay_last_level_batch=levels,
+            )
+            return (rng, train_state), metrics
+        
+        def on_mutate_levels(rng: chex.PRNGKey, train_state: TrainState):
+            """
+                This mutates the previous batch of replay levels and potentially adds them to the level buffer.
+                This also updates the policy iff `config["exploratory_grad_updates"]` is True.
+            """
+            sampler = train_state.sampler
+            rng, rng_mutate, rng_reset = jax.random.split(rng, 3)
+            
+            # mutate
+            parent_levels = train_state.replay_last_level_batch
+            child_levels = jax.vmap(mutate_level, (0, 0, None))(jax.random.split(rng_mutate, config["num_train_envs"]), parent_levels, config["num_edits"])
+            init_obs, init_env_state = jax.vmap(env.reset_to_level, in_axes=(0, 0, None))(jax.random.split(rng_reset, config["num_train_envs"]), child_levels, env_params)
+
+            # rollout
+            (
+                (rng, train_state, hstate, last_obs, last_env_state, last_value),
+                (obs, actions, rewards, dones, log_probs, values, info),
+            ) = sample_trajectories_rnn(
+                rng,
+                env,
+                env_params,
+                train_state,
+                ActorCritic.initialize_carry((config["num_train_envs"],)),
+                init_obs,
+                init_env_state,
+                config["num_train_envs"],
+                config["num_steps"],
+            )
+            advantages, targets = compute_gae(config["gamma"], config["gae_lambda"], last_value, values, rewards, dones)
+            sampler = insert_levels(sampler, child_levels, dones, rewards, values, advantages)
+            
+            # Update: train_state only modified if exploratory_grad_updates is on
+            (rng, train_state), losses = update_actor_critic_rnn(
+                rng,
+                train_state,
+                ActorCritic.initialize_carry((config["num_train_envs"],)),
+                (obs, actions, dones, log_probs, values, targets, advantages),
+                config["num_train_envs"],
+                config["num_steps"],
+                config["num_minibatches"],
+                config["epoch_ppo"],
+                config["clip_eps"],
+                config["entropy_coeff"],
+                config["critic_coeff"],
+                update_grad=config["exploratory_grad_updates"],
+            )
+            
+            metrics = {
+                "losses": jax.tree_util.tree_map(lambda x: x.mean(), losses),
+                "mean_num_blocks": child_levels.wall_map.sum() / config["num_train_envs"],
+            }
+            
+            train_state = train_state.replace(
+                sampler=sampler,
+                update_state=UpdateState.DR,
+                num_mutation_updates=train_state.num_mutation_updates + 1,
+                mutation_last_level_batch=child_levels,
+            )
+            return (rng, train_state), metrics
+    
         rng, rng_replay = jax.random.split(rng)
         
-        (
-            (rng, train_state, hstate, last_obs, last_env_state, last_value),
-            (obs, actions, rewards, dones, log_probs, values, info),
-        ) = sample_trajectories_rnn(
-            rng,
-            env,
-            env_params,
-            train_state,
-            train_state.last_hstate,
-            train_state.last_obs,
-            train_state.last_env_state,
-            config["num_train_envs"],
-            config["num_steps"],
-        )
-        advantages, targets = compute_gae(config["gamma"], config["gae_lambda"], last_value, values, rewards, dones)
+        # The train step makes a decision on which branch to take, either on_new, on_replay or on_mutate.
+        # on_mutate is only called if the replay branch has been taken before (as it uses `train_state.update_state`).
+        if config["use_accel"]:
+            s = train_state.update_state
+            branch = (1 - s) * level_sampler.sample_replay_decision(train_state.sampler, rng_replay) + 2 * s
+        else:
+            branch = level_sampler.sample_replay_decision(train_state.sampler, rng_replay).astype(int)
         
-        (rng, train_state), losses = update_actor_critic_rnn(
-            rng,
-            train_state,
-            train_state.last_hstate,
-            (obs, actions, dones, log_probs, values, targets, advantages),
-            config["num_train_envs"],
-            config["num_steps"],
-            config["num_minibatches"],
-            config["epoch_ppo"],
-            config["clip_eps"],
-            config["entropy_coeff"],
-            config["critic_coeff"],
-            update_grad=True,
+        return jax.lax.switch(
+            branch,
+            [
+                on_new_levels,
+                on_replay_levels,
+                on_mutate_levels,
+            ],
+            rng, train_state
         )
-        
-        metrics = {
-            "losses": jax.tree_util.tree_map(lambda x: x.mean(), losses),
-        }
-        
-        train_state = train_state.replace(
-            update_count=train_state.update_count + 1,
-            last_hstate=hstate,
-            last_env_state=last_env_state,
-            last_obs=last_obs
-        )
-        return (rng, train_state), metrics
     
     def eval(rng: chex.PRNGKey, train_state: TrainState):
         """
@@ -530,7 +766,7 @@ def main(config=None, project="JAXUED_TEST"):
         # Train
         (rng, train_state), metrics = jax.lax.scan(train_step, runner_state, None, config["eval_freq"])
 
-        # Eval        
+        # Eval
         rng, rng_eval = jax.random.split(rng)
         states, cum_rewards, episode_lengths = jax.vmap(eval, (0, None))(jax.random.split(rng_eval, config["eval_num_attempts"]), train_state)
         
@@ -543,12 +779,21 @@ def main(config=None, project="JAXUED_TEST"):
         images = jax.vmap(jax.vmap(env_renderer.render_state, (0, None)), (0, None))(states, env_params) # (num_steps, num_eval_levels, ...)
         frames = images.transpose(0, 1, 4, 2, 3) # WandB expects color channel before image dimensions when dealing with animations for some reason
         
-        metrics["update_count"] = train_state.update_count
+        metrics["update_count"] = train_state.num_dr_updates + train_state.num_replay_updates + train_state.num_mutation_updates
         metrics["eval_returns"] = eval_returns
         metrics["eval_solve_rates"] = eval_solve_rates
         metrics["eval_ep_lengths"]  = episode_lengths
         metrics["eval_animation"] = (frames, episode_lengths)
-
+        metrics["dr_levels"] = jax.vmap(env_renderer.render_level, (0, None))(train_state.dr_last_level_batch, env_params)
+        metrics["replay_levels"] = jax.vmap(env_renderer.render_level, (0, None))(train_state.replay_last_level_batch, env_params)
+        metrics["mutation_levels"] = jax.vmap(env_renderer.render_level, (0, None))(train_state.mutation_last_level_batch, env_params)
+        
+        highest_scoring_level = level_sampler.get_levels(train_state.sampler, train_state.sampler["scores"].argmax())
+        highest_weighted_level = level_sampler.get_levels(train_state.sampler, level_sampler.level_weights(train_state.sampler).argmax())
+        
+        metrics["highest_scoring_level"] = env_renderer.render_level(highest_scoring_level, env_params)
+        metrics["highest_weighted_level"] = env_renderer.render_level(highest_weighted_level, env_params)
+        
         return (rng, train_state), metrics
     
     def eval_checkpoint(og_config):
@@ -559,10 +804,9 @@ def main(config=None, project="JAXUED_TEST"):
         rng_init, rng_eval = jax.random.split(jax.random.PRNGKey(10000))
         def load(rng_init, checkpoint_directory: str):
             with open(os.path.join(checkpoint_directory, 'config.json')) as f: config = json.load(f)
-            checkpoint_manager = ocp.CheckpointManager(os.path.join(os.getcwd(), checkpoint_directory, 'models'), ocp.PyTreeCheckpointer())
+            checkpoint_manager = ocp.CheckpointManager(os.path.join(os.getcwd(), checkpoint_directory, 'models'), item_handlers=ocp.StandardCheckpointHandler())
 
             train_state_og: TrainState = create_train_state(rng_init)
-            all_states = []
             step = checkpoint_manager.latest_step() if og_config['checkpoint_to_eval'] == -1 else og_config['checkpoint_to_eval']
 
             loaded_checkpoint = checkpoint_manager.restore(step)
@@ -595,9 +839,9 @@ def main(config=None, project="JAXUED_TEST"):
         runner_state, metrics = train_and_eval_step(runner_state, None)
         curr_time = time.time()
         metrics['time_delta'] = curr_time - start_time
-        log_eval(metrics)
+        log_eval(metrics, train_state_to_log_dict(runner_state[1], level_sampler))
         if config["checkpoint_save_interval"] > 0:
-            checkpoint_manager.save(eval_step, runner_state[1], args=ocp.args.StandardSave(runner_state[1]))
+            checkpoint_manager.save(eval_step, args=ocp.args.StandardSave(runner_state[1]))
             checkpoint_manager.wait_until_finished()
     return runner_state[1]
 
@@ -629,7 +873,7 @@ if __name__=="__main__":
         "StandardMaze3",
     ])
     group = parser.add_argument_group('Training params')
-    # === PPO ===
+    # === PPO === 
     group.add_argument("--lr", type=float, default=1e-4)
     group.add_argument("--max_grad_norm", type=float, default=0.5)
     mut_group = group.add_mutually_exclusive_group()
@@ -644,6 +888,20 @@ if __name__=="__main__":
     group.add_argument("--gae_lambda", type=float, default=0.98)
     group.add_argument("--entropy_coeff", type=float, default=1e-3)
     group.add_argument("--critic_coeff", type=float, default=0.5)
+    # === PLR ===
+    group.add_argument("--score_function", type=str, default="MaxMC", choices=["MaxMC", "pvl", "recent_learnability"])
+    group.add_argument("--exploratory_grad_updates", action=argparse.BooleanOptionalAction, default=False)
+    group.add_argument("--level_buffer_capacity", type=int, default=4000)
+    group.add_argument("--replay_prob", type=float, default=0.8)
+    group.add_argument("--staleness_coeff", type=float, default=0.3)
+    group.add_argument("--temperature", type=float, default=0.3)
+    group.add_argument("--topk_k", type=int, default=4)
+    group.add_argument("--minimum_fill_ratio", type=float, default=0.5)
+    group.add_argument("--prioritization", type=str, default="rank", choices=["rank", "topk"])
+    group.add_argument("--buffer_duplicate_check", action=argparse.BooleanOptionalAction, default=True)
+    # === ACCEL ===
+    group.add_argument("--use_accel", action=argparse.BooleanOptionalAction, default=False)
+    group.add_argument("--num_edits", type=int, default=5)
     # === ENV CONFIG ===
     group.add_argument("--agent_view_size", type=int, default=5)
     # === DR CONFIG ===
@@ -653,7 +911,7 @@ if __name__=="__main__":
     if config["num_env_steps"] is not None:
         config["num_updates"] = config["num_env_steps"] // (config["num_train_envs"] * config["num_steps"])
     config["group_name"] = ''.join([str(config[key]) for key in sorted([a.dest for a in parser._action_groups[2]._group_actions])])
-
+    
     if config['mode'] == 'eval':
         os.environ['WANDB_MODE'] = 'disabled'
     

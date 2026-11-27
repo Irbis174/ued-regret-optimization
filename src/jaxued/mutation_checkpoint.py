@@ -26,6 +26,8 @@ IGNORED = {
     "resume_checkpoint_directory", "resume_checkpoint_step", "initialize_bandit_on_resume",
     "allow_legacy_resume", "stop_after_updates", "initialize_qd_on_resume", "debug_teacher_parity",
     "fork_hybrid_on_resume", "pace_log_diagnostics",
+    "pace_shadow", "pace_shadow_every", "pace_shadow_levels", "pace_shadow_alpha",
+    "pace_shadow_loss", "pace_shadow_log",
 }
 
 

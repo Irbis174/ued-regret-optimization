@@ -19,7 +19,8 @@ from jaxued.linen import ResetRNN
 from jaxued.environments import Maze, MazeRenderer
 from jaxued.environments.maze import Level, make_level_generator, make_level_mutator_minimax
 from jaxued import adaptive_mutation, hybrid_teacher, learnability, map_elites, mutation_checkpoint
-from jaxued import pace_score, teacher_experiments, teacher_parity
+from jaxued import pace_score, pace_shadow, teacher_experiments, teacher_parity
+from jaxued import pace_adaptive, pace_lite, pace_validation
 from jaxued.level_sampler import LevelSampler
 from jaxued.utils import compute_max_returns, max_mc, positive_value_loss
 from jaxued.wrappers import AutoReplayWrapper
@@ -89,6 +90,8 @@ def sample_trajectories_rnn(
     init_env_state: EnvState,
     num_envs: int,
     max_episode_length: int,
+    *,
+    record_actor_head: bool = False,
 ) -> Tuple[Tuple[chex.PRNGKey, TrainState, chex.ArrayTree, Observation, EnvState, chex.Array], Tuple[Observation, chex.Array, chex.Array, chex.Array, chex.Array, chex.Array, dict]]:
     """This samples trajectories from the environment using the agent specified by the `train_state`.
 
@@ -112,7 +115,12 @@ def sample_trajectories_rnn(
         rng, rng_action, rng_step = jax.random.split(rng, 3)
 
         x = jax.tree_util.tree_map(lambda x: x[None, ...], (obs, last_done))
-        hstate, pi, value = train_state.apply_fn(train_state.params, x, hstate)
+        if record_actor_head:
+            hstate, pi, value, actor_head = train_state.apply_fn(
+                train_state.params, x, hstate, record_actor_head=True,
+            )
+        else:
+            hstate, pi, value = train_state.apply_fn(train_state.params, x, hstate)
         action = pi.sample(seed=rng_action)
         log_prob = pi.log_prob(action)
         value, action, log_prob = (
@@ -124,6 +132,8 @@ def sample_trajectories_rnn(
         next_obs, env_state, reward, done, info = jax.vmap(
             env.step, in_axes=(0, 0, 0, None)
         )(jax.random.split(rng_step, num_envs), env_state, action, env_params)
+        if record_actor_head:
+            info = {**info, "actor_head": tuple(jax.lax.stop_gradient(x[0]) for x in actor_head)}
 
         carry = (rng, train_state, hstate, next_obs, env_state, done)
         return carry, (obs, action, reward, done, log_prob, value, info)
@@ -298,7 +308,7 @@ class ActorCritic(nn.Module):
     action_dim: Sequence[int]
     
     @nn.compact
-    def __call__(self, inputs, hidden):
+    def __call__(self, inputs, hidden, *, record_actor_head=False):
         obs, dones = inputs
         
         img_embed = nn.Conv(16, kernel_size=(3, 3), strides=(1, 1), padding="VALID")(obs.image)
@@ -313,15 +323,16 @@ class ActorCritic(nn.Module):
         hidden, embedding = ResetRNN(nn.OptimizedLSTMCell(features=256))((embedding, dones), initial_carry=hidden)
 
         actor_mean = nn.Dense(32, kernel_init=orthogonal(2), bias_init=constant(0.0), name="actor0")(embedding)
-        actor_mean = nn.relu(actor_mean)
-        actor_mean = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0), name="actor1")(actor_mean)
+        actor_features = nn.relu(actor_mean)
+        actor_mean = nn.Dense(self.action_dim, kernel_init=orthogonal(0.01), bias_init=constant(0.0), name="actor1")(actor_features)
         pi = distrax.Categorical(logits=actor_mean)
 
         critic = nn.Dense(32, kernel_init=orthogonal(2), bias_init=constant(0.0), name="critic0")(embedding)
         critic = nn.relu(critic)
         critic = nn.Dense(1, kernel_init=orthogonal(1.0), bias_init=constant(0.0), name="critic1")(critic)
 
-        return hidden, pi, jnp.squeeze(critic, axis=-1)
+        result = hidden, pi, jnp.squeeze(critic, axis=-1)
+        return (*result, (actor_features, actor_mean)) if record_actor_head else result
     
     @staticmethod
     def initialize_carry(batch_dims):
@@ -430,6 +441,35 @@ def compute_score(config, dones, values, max_returns, advantages):
     else:
         raise ValueError(f"Unknown score function: {config['score_function']}")
 
+
+def log_shadow_rounds(path, metrics, slots, config):
+    measured, branches, rounds, optimizer_steps, batch = jax.device_get(metrics)
+    with path.open("a", encoding="utf-8") as file:
+        for i in np.flatnonzero(measured):
+            scores = batch["score"][i]
+            finite = np.isfinite(scores)
+            valid = scores[finite]
+            row = {
+                "round": int(rounds[i]),
+                "branch": teacher_parity.BRANCHES[branches[i]],
+                "optimizer_steps_before": int(optimizer_steps[i]),
+                "env_steps": int(rounds[i]) * config["num_train_envs"] * config["num_steps"],
+                "alpha": config.get("pace_shadow_alpha", 1e-4),
+                "loss": "policy_only",
+                "advantage_normalization": "full_rollout",
+                "student_num_minibatches": config["num_minibatches"],
+                "finite_ratio": float(finite.mean()),
+                "levels": [
+                    {"slot": slot, **{key: values[i, j].item() if np.isfinite(values[i, j]) else None
+                                      for key, values in batch.items()}}
+                    for j, slot in enumerate(slots)
+                ],
+            }
+            row.update({f"score_{key}": float(stat(valid)) if valid.size else None
+                        for key, stat in (("mean", np.mean), ("std", np.std), ("min", np.min), ("max", np.max))})
+            file.write(json.dumps(row, allow_nan=False) + "\n")
+
+
 def main(config=None, project="JAXUED_TEST"):
     if config.get("debug_teacher_parity"):
         try:
@@ -448,14 +488,45 @@ def main(config=None, project="JAXUED_TEST"):
         tags.append("ACCEL")
     else:
         tags.append("PLR")
-    use_pace = config["score_function"] == "pace_pg"
-    log_pace = use_pace and config.get("pace_log_diagnostics", False)
+    pace_method = config["score_function"]
+    pace_options = pace_adaptive.validate(config) if pace_method in (*pace_adaptive.METHODS, *pace_lite.METHODS) else None
+    if pace_method in ("pace_hybrid", pace_lite.HYBRID) and pace_options["hybrid_pace_weight"] == 0:
+        config = {**config, "score_function": "MaxMC"}
+        pace_method, pace_options = "MaxMC", None
+    if pace_method == pace_lite.HYBRID and pace_options["hybrid_pace_weight"] == 1:
+        pace_method = pace_lite.STANDALONE
+    lite_pace = pace_method in pace_lite.METHODS
+    if lite_pace and pace_options["pace_warmup_fraction"]:
+        raise ValueError("PACE Lite uses a fixed mixing weight and requires zero warmup")
+    adaptive_pace = pace_options is not None
+    pace_hybrid = pace_method in ("pace_hybrid", pace_lite.HYBRID)
+    validation_path = config.get("pace_validation_file") if config["mode"] == "train" else None
+    if adaptive_pace and (not config["use_accel"] or config.get("mutation_selection", "fixed") != "fixed"
+                          or config.get("dual_score_tracking") or config.get("qd_mode", "off") != "off"):
+        raise ValueError("adaptive PACE requires fixed ACCEL with QD and dual-score tracking disabled")
+    use_pace = pace_method == "pace_pg" or adaptive_pace
+    log_pace = pace_method == "pace_pg" and config.get("pace_log_diagnostics", False)
+    shadow_enabled = config["mode"] == "train" and config.get("pace_shadow", False)
+    if shadow_enabled:
+        shadow_every = config.get("pace_shadow_every", 25)
+        shadow_alpha = config.get("pace_shadow_alpha", 1e-4)
+        if shadow_every < 1 or not np.isfinite(shadow_alpha) or shadow_alpha <= 0:
+            raise ValueError("PACE Shadow needs a positive interval and finite positive alpha")
+        if config.get("pace_shadow_loss", "policy_only") != "policy_only":
+            raise ValueError("PACE Shadow supports policy_only")
+        shadow_slots = pace_shadow.level_slots(config["num_train_envs"], config.get("pace_shadow_levels", 4))
     if use_pace:
         if config["num_minibatches"] != 1:
             raise ValueError("pace_pg requires num_minibatches=1 for PPO advantage normalization")
         tags.append("PACE-PG")
     run = wandb.init(config=config, project=project, group=config["run_name"], tags=tags)
     config = wandb.config
+    if shadow_enabled:
+        shadow_path = Path(config.get("pace_shadow_log") or f"logs/pace-shadow/{run.id}.jsonl")
+        shadow_path.parent.mkdir(parents=True, exist_ok=True)
+        with shadow_path.open("x", encoding="utf-8"):
+            pass
+        print(f"PACE Shadow log: {shadow_path}", flush=True)
     
     wandb.define_metric("num_updates")
     wandb.define_metric("num_env_steps")
@@ -585,7 +656,11 @@ def main(config=None, project="JAXUED_TEST"):
         level_extra = learnability.empty_history(track_progress=use_har) if use_learnability else {"max_return": -jnp.inf}
         if dual_scores:
             level_extra = hybrid_teacher.empty_history()
+        if adaptive_pace:
+            level_extra = pace_adaptive.empty_extra(pace_hybrid)
         sampler = level_sampler.initialize(pholder_level, level_extra)
+        if adaptive_pace:
+            sampler["pace_threshold"] = jnp.float32(0)
         if selection == "bandit":
             sampler["mutation_bandit"] = adaptive_mutation.initialize(num_arms)
         if qd_mode != "off":
@@ -620,18 +695,92 @@ def main(config=None, project="JAXUED_TEST"):
             train_state = train_state.replace(sampler=hybrid_teacher.reweight(
                 train_state.sampler, hybrid_weight, raw_rank=rank_priorities,
             ))
-
-        def score_pace_rollout(train_state, obs, actions, dones, rewards, advantages):
-            if not use_pace:
-                return None, {}
-            scores = pace_score.compute_pace_pg_scores(
-                train_state.apply_fn, train_state.params, obs, actions, dones, advantages,
-                ActorCritic.initialize_carry((actions.shape[1],)),
-                chunk_size=config.get("pace_score_chunk_size", 1),
-                entropy_coeff=config["entropy_coeff"] if config.get("pace_score_entropy", False) else 0.0,
+        warmup_rounds = (int(np.ceil(config["num_updates"] * pace_options["pace_warmup_fraction"]))
+                         if adaptive_pace else 0)
+        warmup = round_index < warmup_rounds
+        if warmup_rounds:
+            sampler = jax.lax.cond(
+                round_index == warmup_rounds,
+                lambda s: pace_adaptive.reweight(s, s["pace_threshold"], pace_options, pace_method),
+                lambda s: s, train_state.sampler,
             )
-            metrics = {"pace": pace_score.rollout_statistics(scores, advantages, dones, rewards)} if log_pace else {}
-            return jnp.where(jnp.isfinite(scores), scores, 0), metrics
+            train_state = train_state.replace(sampler=sampler)
+
+        def score_pace_rollout(train_state, sampler, obs, actions, dones, rewards, advantages, info):
+            rollout_metrics = {}
+            if validation_path:
+                positions = jnp.arange(1, dones.shape[0] + 1)[:, None]
+                last_ends = jax.lax.associative_scan(jnp.maximum, jnp.where(dones, positions, 0))
+                previous_ends = jnp.roll(last_ends, 1, axis=0).at[0].set(0)
+                rollout_metrics = {"training": {
+                    "episodes": dones.sum(), "successes": (dones & (rewards > 0)).sum(),
+                    "return_sum": rewards.sum(), "length_sum": jnp.where(dones, positions - previous_ends, 0).sum(),
+                }}
+            if not use_pace:
+                return sampler, None, rollout_metrics
+            if lite_pace:
+                scores = pace_lite.scores(*info["actor_head"], actions, advantages)
+            else:
+                scores = pace_score.compute_pace_pg_scores(
+                    train_state.apply_fn, train_state.params, obs, actions, dones, advantages,
+                    ActorCritic.initialize_carry((actions.shape[1],)),
+                    chunk_size=config.get("pace_score_chunk_size", 1),
+                    entropy_coeff=config["entropy_coeff"] if config.get("pace_score_entropy", False) else 0.0,
+                )
+            if adaptive_pace:
+                sampler, sanitized, stats = pace_adaptive.prepare(
+                    sampler, scores, pace_options, pace_method, warmup, rescore=not lite_pace,
+                )
+                return sampler, scores if lite_pace else sanitized, {**rollout_metrics, "pace": stats}
+            if log_pace:
+                rollout_metrics["pace"] = pace_score.rollout_statistics(scores, advantages, dones, rewards)
+            return sampler, jnp.where(jnp.isfinite(scores), scores, 0), rollout_metrics
+
+        def adaptive_priorities(sampler, squared, dones, values, max_returns, metrics, replay_indices=None):
+            extra = {"grad_squared": squared, "max_return": max_returns}
+            if pace_hybrid:
+                extra["maxmc"] = max_mc(dones, values, max_returns)
+            if lite_pace:
+                valid = jnp.isfinite(squared) & (squared >= 0)
+                if replay_indices is not None:
+                    previous = level_sampler.get_levels_extra(sampler, replay_indices)
+                    extra = {key: jnp.where(valid, value, previous[key]) for key, value in extra.items()}
+                sampler, scores = pace_lite.synchronize(sampler, extra, pace_options, pace_hybrid)
+            else:
+                scores = pace_adaptive.priority(extra, sampler["pace_threshold"], pace_options, pace_method, warmup)
+            metrics["pace"].update(pace_adaptive.rollout_metrics(jnp.where(jnp.isfinite(scores), scores, 0)))
+            return sampler, scores, extra
+
+        def insert_adaptive(sampler, levels, scores, extra):
+            if lite_pace:
+                return pace_lite.insert_batch(level_sampler, sampler, levels, scores, extra)
+            return level_sampler.insert_batch(sampler, levels, scores, extra)[0]
+
+        def probe_shadow(branch, state, init_hstate, obs, actions, dones, log_probs, advantages, rewards, values):
+            if not shadow_enabled:
+                return {}
+
+            def measure():
+                slots = jnp.asarray(shadow_slots, dtype=jnp.int32)
+                scores = pace_shadow.rollout_scores(
+                    state.apply_fn, state.params, init_hstate, obs, actions, dones, log_probs,
+                    advantages, slots, step_size=shadow_alpha, clip_eps=config["clip_eps"],
+                    entropy_coeff=config["entropy_coeff"],
+                )
+                return {"score": scores, **pace_shadow.rollout_comparisons(
+                    dones, rewards, values, advantages, slots,
+                )}
+
+            def skip():
+                zeros = jnp.zeros(len(shadow_slots), dtype=jnp.float32)
+                counts = jnp.zeros(len(shadow_slots), dtype=jnp.int32)
+                return dict(score=zeros, maxmc_rollout=zeros, pvl=zeros, recent_rollout=zeros,
+                            completed_episodes=counts, solved_episodes=counts)
+
+            round_number = round_index + 1
+            measured = round_number % shadow_every == 0
+            batch = jax.lax.cond(measured, measure, skip)
+            return {"pace_shadow": (measured, branch, round_number, state.step, batch)}
 
         def insert_levels(sampler, levels, dones, rewards, values, advantages, pace_priority=None):
             max_returns = compute_max_returns(dones, rewards)
@@ -699,6 +848,7 @@ def main(config=None, project="JAXUED_TEST"):
             trace_selection("new", rng, new_levels)
             init_obs, init_env_state = jax.vmap(env.reset_to_level, in_axes=(0, 0, None))(jax.random.split(rng_reset, config["num_train_envs"]), new_levels, env_params)
             # Rollout
+            init_hstate = ActorCritic.initialize_carry((config["num_train_envs"],))
             (
                 (rng, train_state, hstate, last_obs, last_env_state, last_value),
                 (obs, actions, rewards, dones, log_probs, values, info),
@@ -707,17 +857,26 @@ def main(config=None, project="JAXUED_TEST"):
                 env,
                 env_params,
                 train_state,
-                ActorCritic.initialize_carry((config["num_train_envs"],)),
+                init_hstate,
                 init_obs,
                 init_env_state,
                 config["num_train_envs"],
                 config["num_steps"],
+                record_actor_head=lite_pace,
             )
             trace_rollout(rng, obs, actions, rewards, dones, log_probs, values, last_value)
             advantages, targets = compute_gae(config["gamma"], config["gae_lambda"], last_value, values, rewards, dones)
-            pace_scores, pace_metrics = score_pace_rollout(train_state, obs, actions, dones, rewards, advantages)
-            pace_priority = None if pace_scores is None else pace_scores[None]
-            sampler = insert_levels(sampler, new_levels, dones, rewards, values, advantages, pace_priority)
+            shadow_metrics = probe_shadow(0, train_state, init_hstate, obs, actions, dones, log_probs,
+                                          advantages, rewards, values)
+            sampler, pace_scores, pace_metrics = score_pace_rollout(train_state, sampler, obs, actions, dones, rewards, advantages, info)
+            if adaptive_pace:
+                sampler, scores, extra = adaptive_priorities(
+                    sampler, pace_scores, dones, values, compute_max_returns(dones, rewards), pace_metrics,
+                )
+                sampler = insert_adaptive(sampler, new_levels, scores, extra)
+            else:
+                pace_priority = None if pace_scores is None else pace_scores[None]
+                sampler = insert_levels(sampler, new_levels, dones, rewards, values, advantages, pace_priority)
             sampler = observe_qd(sampler, new_levels, dones, rewards, values, rng)
             trace_sampler(sampler)
             
@@ -725,7 +884,7 @@ def main(config=None, project="JAXUED_TEST"):
             (rng, train_state), losses = update_actor_critic_rnn(
                 rng,
                 train_state,
-                ActorCritic.initialize_carry((config["num_train_envs"],)),
+                init_hstate,
                 (obs, actions, dones, log_probs, values, targets, advantages),
                 config["num_train_envs"],
                 config["num_steps"],
@@ -742,6 +901,7 @@ def main(config=None, project="JAXUED_TEST"):
                 "mean_num_blocks": new_levels.wall_map.sum() / config["num_train_envs"],
                 "replay": jnp.zeros(5, dtype=jnp.float32),
                 **pace_metrics,
+                **shadow_metrics,
             }
             if selection != "fixed":
                 metrics["mutation"] = empty_mutation_metrics
@@ -768,6 +928,7 @@ def main(config=None, project="JAXUED_TEST"):
             trace_selection("replay", rng, levels, level_inds)
             replay_stats = teacher_experiments.replay_batch_stats(level_inds, teacher_experiments.frontier_mask(sampler))
             init_obs, init_env_state = jax.vmap(env.reset_to_level, in_axes=(0, 0, None))(jax.random.split(rng_reset, config["num_train_envs"]), levels, env_params)
+            init_hstate = ActorCritic.initialize_carry((config["num_train_envs"],))
             (
                 (rng, train_state, hstate, last_obs, last_env_state, last_value),
                 (obs, actions, rewards, dones, log_probs, values, info),
@@ -776,15 +937,18 @@ def main(config=None, project="JAXUED_TEST"):
                 env,
                 env_params,
                 train_state,
-                ActorCritic.initialize_carry((config["num_train_envs"],)),
+                init_hstate,
                 init_obs,
                 init_env_state,
                 config["num_train_envs"],
                 config["num_steps"],
+                record_actor_head=lite_pace,
             )
             trace_rollout(rng, obs, actions, rewards, dones, log_probs, values, last_value)
             advantages, targets = compute_gae(config["gamma"], config["gae_lambda"], last_value, values, rewards, dones)
-            pace_scores, pace_metrics = score_pace_rollout(train_state, obs, actions, dones, rewards, advantages)
+            shadow_metrics = probe_shadow(1, train_state, init_hstate, obs, actions, dones, log_probs,
+                                          advantages, rewards, values)
+            sampler, pace_scores, pace_metrics = score_pace_rollout(train_state, sampler, obs, actions, dones, rewards, advantages, info)
             max_returns = compute_max_returns(dones, rewards)
             if use_learnability:
                 evidence = learnability.rollout_evidence(dones, rewards, values, max_returns)
@@ -799,9 +963,15 @@ def main(config=None, project="JAXUED_TEST"):
                     )
             else:
                 max_returns = jnp.maximum(level_sampler.get_levels_extra(sampler, level_inds)["max_return"], max_returns)
-                scores = (compute_score(config, dones, values, max_returns, advantages)
-                          if pace_scores is None else pace_scores)
-                sampler = level_sampler.update_batch(sampler, level_inds, scores, {"max_return": max_returns})
+                if adaptive_pace:
+                    sampler, scores, extra = adaptive_priorities(
+                        sampler, pace_scores, dones, values, max_returns, pace_metrics, level_inds,
+                    )
+                else:
+                    scores = (compute_score(config, dones, values, max_returns, advantages)
+                              if pace_scores is None else pace_scores)
+                    extra = {"max_return": max_returns}
+                sampler = level_sampler.update_batch(sampler, level_inds, scores, extra)
             sampler = observe_qd(sampler, levels, dones, rewards, values, rng)
             trace_sampler(sampler)
             
@@ -809,7 +979,7 @@ def main(config=None, project="JAXUED_TEST"):
             (rng, train_state), losses = update_actor_critic_rnn(
                 rng,
                 train_state,
-                ActorCritic.initialize_carry((config["num_train_envs"],)),
+                init_hstate,
                 (obs, actions, dones, log_probs, values, targets, advantages),
                 config["num_train_envs"],
                 config["num_steps"],
@@ -825,6 +995,7 @@ def main(config=None, project="JAXUED_TEST"):
                 "losses": jax.tree_util.tree_map(lambda x: x.mean(), losses),
                 "mean_num_blocks": levels.wall_map.sum() / config["num_train_envs"],
                 **pace_metrics,
+                **shadow_metrics,
                 "replay": replay_stats,
             }
             if selection != "fixed":
@@ -882,6 +1053,7 @@ def main(config=None, project="JAXUED_TEST"):
             init_obs, init_env_state = jax.vmap(env.reset_to_level, in_axes=(0, 0, None))(jax.random.split(rng_reset, config["num_train_envs"]), child_levels, env_params)
 
             # rollout
+            init_hstate = ActorCritic.initialize_carry((config["num_train_envs"],))
             (
                 (rng, train_state, hstate, last_obs, last_env_state, last_value),
                 (obs, actions, rewards, dones, log_probs, values, info),
@@ -890,17 +1062,25 @@ def main(config=None, project="JAXUED_TEST"):
                 env,
                 env_params,
                 train_state,
-                ActorCritic.initialize_carry((config["num_train_envs"],)),
+                init_hstate,
                 init_obs,
                 init_env_state,
                 config["num_train_envs"],
                 config["num_steps"],
+                record_actor_head=lite_pace,
             )
             trace_rollout(rng, obs, actions, rewards, dones, log_probs, values, last_value)
             advantages, targets = compute_gae(config["gamma"], config["gae_lambda"], last_value, values, rewards, dones)
-            pace_scores, pace_metrics = score_pace_rollout(train_state, obs, actions, dones, rewards, advantages)
+            shadow_metrics = probe_shadow(2, train_state, init_hstate, obs, actions, dones, log_probs,
+                                          advantages, rewards, values)
+            sampler, pace_scores, pace_metrics = score_pace_rollout(train_state, sampler, obs, actions, dones, rewards, advantages, info)
             pace_priority = None if pace_scores is None else pace_scores[None]
-            if selection == "fixed":
+            if adaptive_pace:
+                sampler, scores, extra = adaptive_priorities(
+                    sampler, pace_scores, dones, values, compute_max_returns(dones, rewards), pace_metrics,
+                )
+                sampler = insert_adaptive(sampler, child_levels, scores, extra)
+            elif selection == "fixed":
                 sampler = insert_levels(sampler, child_levels, dones, rewards, values, advantages, pace_priority)
             else:
                 rollout = dones, rewards, values, advantages
@@ -921,7 +1101,7 @@ def main(config=None, project="JAXUED_TEST"):
             (rng, train_state), losses = update_actor_critic_rnn(
                 rng,
                 train_state,
-                ActorCritic.initialize_carry((config["num_train_envs"],)),
+                init_hstate,
                 (obs, actions, dones, log_probs, values, targets, advantages),
                 config["num_train_envs"],
                 config["num_steps"],
@@ -938,6 +1118,7 @@ def main(config=None, project="JAXUED_TEST"):
                 "mean_num_blocks": child_levels.wall_map.sum() / config["num_train_envs"],
                 "replay": jnp.zeros(5, dtype=jnp.float32),
                 **pace_metrics,
+                **shadow_metrics,
             }
             if selection != "fixed":
                 metrics["mutation"] = adaptive_mutation.batch_metrics(stats, fitness, indices, num_arms)
@@ -996,9 +1177,12 @@ def main(config=None, project="JAXUED_TEST"):
         This evaluates the current policy on the set of evaluation levels specified by config["eval_levels"].
         It returns (states, cum_rewards, episode_lengths), with shapes (num_steps, num_eval_levels, ...), (num_eval_levels,), (num_eval_levels,)
         """
-        rng, rng_reset = jax.random.split(rng)
         levels = Level.load_prefabs(config["eval_levels"])
-        num_levels = len(config["eval_levels"])
+        return evaluate_levels(rng, train_state, levels)
+
+    def evaluate_levels(rng, train_state, levels):
+        rng, rng_reset = jax.random.split(rng)
+        num_levels = levels.agent_dir.shape[0]
         init_obs, init_env_state = jax.vmap(eval_env.reset_to_level, (0, 0, None))(jax.random.split(rng_reset, num_levels), levels, env_params)
         states, rewards, episode_lengths = evaluate_rnn(
             rng,
@@ -1015,13 +1199,22 @@ def main(config=None, project="JAXUED_TEST"):
         return states, cum_rewards, episode_lengths # (num_steps, num_eval_levels, ...), (num_eval_levels,), (num_eval_levels,)
     
     @jax.jit
+    def validation_returns(train_state, levels):
+        keys = jax.random.split(jax.random.PRNGKey(pace_validation.EVAL_SEED), pace_validation.ATTEMPTS)
+        return jax.lax.map(lambda key: evaluate_levels(key, train_state, levels)[1], keys)
+
+    @jax.jit
     def train_and_eval_step(runner_state, _):
         """
             This function runs the train_step for a certain number of iterations, and then evaluates the policy.
             It returns the updated train state, and a dictionary of metrics.
         """
         # Train
-        (rng, train_state), metrics = jax.lax.scan(train_step, runner_state, None, config["eval_freq"])
+        runner_state, metrics = jax.lax.scan(train_step, runner_state, None, config["eval_freq"])
+        return finish_interval(runner_state, metrics)
+
+    def finish_interval(runner_state, metrics):
+        rng, train_state = runner_state
         batches, unique, copies, frontier, ess = metrics["replay"].sum(axis=0)
         denom = jnp.maximum(batches, 1)
         metrics["replay"] = {
@@ -1032,10 +1225,17 @@ def main(config=None, project="JAXUED_TEST"):
             "replay/mean_frontier_share": frontier / denom,
             "replay/mean_batch_ess": ess / denom,
         }
-        if log_pace:
+        if log_pace or adaptive_pace:
             pace_metrics = metrics["pace"]
             metrics["pace"] = {key: value.mean() for key, value in pace_metrics.items()}
-            metrics["pace"]["pace/max_score"] = pace_metrics["pace/max_score"].max()
+            if log_pace:
+                metrics["pace"]["pace/max_score"] = pace_metrics["pace/max_score"].max()
+            else:
+                metrics["pace"]["pace/threshold"] = train_state.sampler["pace_threshold"]
+                for name in ("grad_norm_min", "score_min"):
+                    metrics["pace"][f"pace/{name}"] = pace_metrics[f"pace/{name}"].min()
+                for name in ("grad_norm_max", "score_max"):
+                    metrics["pace"][f"pace/{name}"] = pace_metrics[f"pace/{name}"].max()
         if qd_mode != "off":
             totals = metrics.pop("qd").sum(axis=0)
             batches, parents, unique_parents, unique_children, valid, unchanged = totals[:6]
@@ -1074,6 +1274,19 @@ def main(config=None, project="JAXUED_TEST"):
 
         # Eval
         rng, rng_eval = jax.random.split(rng)
+        if validation_path:
+            _, (value_loss, actor_loss, entropy) = metrics.pop("losses")
+            training = metrics["training"]
+            episodes = jnp.maximum(training["episodes"].sum(), 1)
+            metrics["training"] = {
+                "train/solve_rate": training["successes"].sum() / episodes,
+                "train/episode_return": training["return_sum"].sum() / episodes,
+                "train/episode_length": training["length_sum"].sum() / episodes,
+                "train/policy_entropy": entropy.mean(), "train/value_loss": value_loss.mean(),
+                "train/actor_loss": actor_loss.mean(),
+            }
+            metrics["update_count"] = train_state.num_dr_updates + train_state.num_replay_updates + train_state.num_mutation_updates
+            return (rng, train_state), metrics
         states, cum_rewards, episode_lengths = jax.vmap(eval, (0, None))(jax.random.split(rng_eval, config["eval_num_attempts"]), train_state)
         
         # Collect Metrics
@@ -1126,9 +1339,9 @@ def main(config=None, project="JAXUED_TEST"):
         
         train_state, config = load(rng_init, og_config['checkpoint_directory'])
         states, cum_rewards, episode_lengths = jax.vmap(eval, (0, None))(jax.random.split(rng_eval, og_config["eval_num_attempts"]), train_state)
-        save_loc = og_config['checkpoint_directory'].replace('checkpoints', 'results')
+        save_loc = og_config.get("pace_eval_output") or og_config['checkpoint_directory'].replace('checkpoints', 'results')
         os.makedirs(save_loc, exist_ok=True)
-        np.savez_compressed(os.path.join(save_loc, 'results.npz'), states=np.asarray(states), cum_rewards=np.asarray(cum_rewards), episode_lengths=np.asarray(episode_lengths), levels=config['eval_levels'])
+        np.savez_compressed(os.path.join(save_loc, 'results.npz'), states=np.asarray(states), cum_rewards=np.asarray(cum_rewards), episode_lengths=np.asarray(episode_lengths), levels=og_config['eval_levels'])
         return states, cum_rewards, episode_lengths
 
     if config['mode'] == 'eval':
@@ -1156,6 +1369,15 @@ def main(config=None, project="JAXUED_TEST"):
     if parity is not None:
         parity.snapshot(runner_state[1], runner_state[0], completed, "initial")
     
+    if validation_path:
+        if config["checkpoint_save_interval"] <= 0:
+            raise ValueError("PACE research validation requires checkpointing")
+        validation_levels, validation_tiers = pace_validation.load(validation_path)
+        validation_freq = config.get("pace_validation_freq", 1000)
+        if validation_freq < interval or validation_freq % interval:
+            raise ValueError("validation cadence must be a positive multiple of eval_freq")
+        run_start = time.monotonic()
+
     # And run the train_eval_sep function for the specified number of updates
     if config["checkpoint_save_interval"] > 0:
         checkpoint_manager = setup_checkpointing(config, train_state, env, env_params)
@@ -1165,9 +1387,25 @@ def main(config=None, project="JAXUED_TEST"):
             (checkpoint_manager.directory.parent / "hybrid_initial_state.json").write_text(
                 json.dumps(initial, indent=2) + "\n", encoding="utf-8"
             )
+    lite_round = jax.jit(train_step) if lite_pace and validation_path else None
+    lite_finish = jax.jit(finish_interval) if lite_round is not None else None
     for eval_step in range(completed // interval, stop_after // interval):
+        if lite_pace and validation_path and eval_step == completed // interval:
+            print(f"PACE Lite: compiling a training round on {jax.default_backend()}.", flush=True)
         start_time = time.time()
-        runner_state, metrics = train_and_eval_step(runner_state, None)
+        if lite_round is None:
+            runner_state, metrics = train_and_eval_step(runner_state, None)
+        else:
+            samples = []
+            for offset in range(1, interval + 1):
+                runner_state, sample = lite_round(runner_state, None)
+                samples.append(sample)
+                if offset % 25 == 0 or offset == 1:
+                    jax.block_until_ready(sample["replay"])
+                    print(f"PACE Lite: completed round {eval_step * interval + offset}", flush=True)
+            metrics = jax.tree_util.tree_map(lambda *steps: jnp.stack(steps), *samples)
+            runner_state, metrics = lite_finish(runner_state, metrics)
+            jax.block_until_ready(metrics["update_count"])
         if parity is not None:
             jax.effects_barrier()
             parity.snapshot(runner_state[1], runner_state[0], metrics["update_count"], "evaluation_boundary")
@@ -1181,7 +1419,39 @@ def main(config=None, project="JAXUED_TEST"):
         state_info = train_state_to_log_dict(state, level_sampler, weight_sampler=weights)
         if dual_scores:
             state_info["log"].update(hybrid_teacher.statistics(state.sampler, weight))
-        diagnostics = log_eval(metrics, state_info)
+        if validation_path:
+            count = int(metrics["update_count"])
+            directory = checkpoint_manager.directory.parent
+            diagnostics = {
+                **state_info["log"], **metrics["replay"], **metrics.get("pace", {}), **metrics["training"],
+                "num_env_steps": count * config["num_train_envs"] * config["num_steps"],
+                "gradient_updates": int(state.step),
+                "buffer/effective_sample_size": state_info["log"]["level_sampler/weight_ess"],
+            }
+            if lite_pace:
+                diagnostics["perf/segment_seconds"] = curr_time - start_time
+                diagnostics["perf/env_steps_per_second"] = (
+                    interval * config["num_train_envs"] * config["num_steps"] / (curr_time - start_time)
+                )
+            if count % validation_freq == 0 or count == stop_after:
+                eval_started = time.monotonic()
+                returns = np.asarray(validation_returns(state, validation_levels))
+                if lite_pace:
+                    diagnostics["perf/validation_seconds"] = time.monotonic() - eval_started
+                diagnostics.update(pace_validation.metrics(returns, validation_tiers))
+                diagnostics.update(pace_validation.buffer_metrics(state.sampler, validation_levels,
+                                                                   directory / f"buffer-{count}.npz"))
+                np.savez_compressed(directory / f"validation-{count}.npz", returns=returns, tiers=validation_tiers)
+            if lite_pace:
+                memory = jax.devices()[0].memory_stats() or {}
+                if "peak_bytes_in_use" in memory:
+                    diagnostics["perf/peak_device_allocator_bytes"] = memory["peak_bytes_in_use"]
+            diagnostics["wall_clock_time"] = time.monotonic() - run_start
+            print(f"PACE research round {count}: validation={diagnostics.get('eval/validation_solve_rate', 'pending')}", flush=True)
+        else:
+            diagnostics = log_eval(metrics, state_info)
+        if shadow_enabled:
+            log_shadow_rounds(shadow_path, metrics["pace_shadow"], shadow_slots, config)
         if config["checkpoint_save_interval"] > 0:
             diagnostics = {key: float(value) for key, value in diagnostics.items()}
             diagnostics["num_updates"] = int(metrics["update_count"])
@@ -1193,7 +1463,8 @@ def main(config=None, project="JAXUED_TEST"):
                 raise FloatingPointError(f"nonfinite teacher statistics at update {diagnostics['num_updates']}")
             with open(checkpoint_manager.directory.parent / "teacher_metrics.jsonl", "a", encoding="utf-8") as file:
                 file.write(json.dumps(diagnostics) + "\n")
-            checkpoint_manager.save(eval_step, args=ocp.args.StandardSave(mutation_checkpoint.payload(*runner_state)))
+            checkpoint_manager.save(eval_step, args=ocp.args.StandardSave(mutation_checkpoint.payload(*runner_state)),
+                                    force=bool(validation_path and diagnostics["num_updates"] == stop_after))
             checkpoint_manager.wait_until_finished()
     if config["checkpoint_save_interval"] > 0:
         checkpoint_manager.close()
@@ -1254,7 +1525,8 @@ if __name__=="__main__":
     group.add_argument("--critic_coeff", type=float, default=0.5)
     # === PLR ===
     group.add_argument("--score_function", type=str, default="MaxMC",
-                       choices=["MaxMC", "pvl", "recent_learnability", "history_aware_regret", "hybrid", "pace_pg"])
+                       choices=["MaxMC", "pvl", "recent_learnability", "history_aware_regret", "hybrid", "pace_pg",
+                                *pace_adaptive.METHODS, *pace_lite.METHODS])
     group.add_argument("--dual_score_tracking", action="store_true")
     group.add_argument("--hybrid_mode", choices=hybrid_teacher.MODES)
     group.add_argument("--hybrid_start_round", type=int, default=hybrid_teacher.DEFAULTS["hybrid_start_round"])
@@ -1296,8 +1568,22 @@ if __name__=="__main__":
     pace_args.add_argument("--pace_score_chunk_size", type=int, default=1)
     pace_args.add_argument("--pace_score_entropy", action="store_true")
     pace_args.add_argument("--pace_log_diagnostics", action="store_true")
+    for name in pace_adaptive.DEFAULTS:
+        pace_args.add_argument(f"--{name}", type=float, default=argparse.SUPPRESS)
+    pace_args.add_argument("--pace_validation_file", default=argparse.SUPPRESS)
+    pace_args.add_argument("--pace_validation_freq", type=int, default=argparse.SUPPRESS)
+    pace_args.add_argument("--pace_eval_output", default=argparse.SUPPRESS)
+
+    shadow_args = parser.add_argument_group("PACE Shadow")
+    shadow_args.add_argument("--pace_shadow", nargs="?", const="true", default="false", choices=("true", "false"))
+    shadow_args.add_argument("--pace_shadow_every", type=int, default=25)
+    shadow_args.add_argument("--pace_shadow_levels", type=int, default=4)
+    shadow_args.add_argument("--pace_shadow_alpha", type=float, default=1e-4)
+    shadow_args.add_argument("--pace_shadow_loss", choices=("policy_only",), default="policy_only")
+    shadow_args.add_argument("--pace_shadow_log")
     
     config = vars(parser.parse_args())
+    config["pace_shadow"] = config["pace_shadow"] == "true"
     if config["pace_score_chunk_size"] < 1:
         parser.error("--pace_score_chunk_size must be positive")
     try:

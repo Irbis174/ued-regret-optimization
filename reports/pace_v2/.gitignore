@@ -1,0 +1,7 @@
+.figures-state.json
+*.lock
+*.log
+/source/
+/runs/
+/figures/
+!/research.md

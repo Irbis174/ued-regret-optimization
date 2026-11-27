@@ -1,0 +1,445 @@
+{
+  "jobs": [
+    {
+      "id": "F03",
+      "method": "pace_adaptive_floor",
+      "q": 0.75,
+      "floor": 0.3,
+      "ema": 0.95,
+      "shape": 1.0,
+      "alpha": 0.2,
+      "seed": 0,
+      "target": 5000,
+      "reason": "Больший вес Floor.",
+      "parent": null,
+      "status": "COMPLETED",
+      "attempts": [
+        {
+          "folder": "/mnt/f/тз тбанк/jaxued/reports/pace_v2/runs/F03/attempt-1",
+          "run_name": "pace-v2-f03-a1",
+          "worker": [
+            21833,
+            "7419580",
+            "6b697ca1-58f5-447f-9d30-3409b76b6219"
+          ],
+          "pid": 21834,
+          "process": [
+            21834,
+            "7419591",
+            "6b697ca1-58f5-447f-9d30-3409b76b6219"
+          ],
+          "phase": "train",
+          "at": "2026-11-26T15:28:58+03:00",
+          "status": "COMPLETED",
+          "exit_code": 0,
+          "result": {
+            "metrics": {
+              "level_sampler/size": 4000.0,
+              "level_sampler/episode_count": 160000.0,
+              "level_sampler/max_score": 0.853884220123291,
+              "level_sampler/weighted_score": 0.7553762197494507,
+              "level_sampler/mean_score": 0.5372639298439026,
+              "level_sampler/nonfinite_active_scores": 0.0,
+              "level_sampler/nonfinite_active_weights": 0.0,
+              "level_sampler/frontier_fraction": 0.0,
+              "level_sampler/frontier_weight": 0.0,
+              "level_sampler/weight_ess": 2.65802001953125,
+              "replay/batches": 115.0,
+              "replay/max_copies": 26.0,
+              "replay/mean_batch_ess": 2.708225727081299,
+              "replay/mean_frontier_share": 0.0,
+              "replay/mean_max_copies": 19.50434684753418,
+              "replay/mean_unique_levels": 12.365217208862305,
+              "pace/above_threshold_fraction": 0.2578750252723694,
+              "pace/floor_score_mean": 0.3396639823913574,
+              "pace/grad_norm_max": 8.477932929992676,
+              "pace/grad_norm_mean": 1.600706934928894,
+              "pace/grad_norm_min": 1.0595128330237458e-08,
+              "pace/grad_norm_p25": 0.9212871789932251,
+              "pace/grad_norm_p50": 1.4634441137313843,
+              "pace/grad_norm_p75": 2.113288402557373,
+              "pace/grad_norm_p90": 2.8519880771636963,
+              "pace/grad_norm_p95": 3.2803332805633545,
+              "pace/grad_norm_p99": 4.008028030395508,
+              "pace/grad_norm_std": 0.9762983918190002,
+              "pace/invalid_fraction": 0.0,
+              "pace/near_zero_score_fraction": 0.005875000264495611,
+              "pace/nonfinite_fraction": 0.0,
+              "pace/normalized_grad_mean": 0.7562877535820007,
+              "pace/normalized_grad_std": 0.4612278640270233,
+              "pace/optimal_score_mean": 0.6167325973510742,
+              "pace/score_max": 0.8538850545883179,
+              "pace/score_mean": 0.5336120128631592,
+              "pace/score_min": 5.278288457793133e-17,
+              "pace/score_std": 0.2650558650493622,
+              "pace/threshold": 2.202800750732422,
+              "pace/threshold_current_quantile": 2.113288402557373,
+              "train/actor_loss": -0.000429538864409551,
+              "train/episode_length": 18.33706283569336,
+              "train/episode_return": 0.9332748651504517,
+              "train/policy_entropy": 0.11124428361654282,
+              "train/solve_rate": 0.9928828477859497,
+              "train/value_loss": 0.010030986741185188,
+              "num_env_steps": 40960000.0,
+              "gradient_updates": 11010.0,
+              "buffer/effective_sample_size": 2.65802001953125,
+              "eval/validation_tier_easy_solve_rate": 0.9765625,
+              "eval/validation_tier_medium_solve_rate": 0.875,
+              "eval/validation_tier_hard_solve_rate": 0.6171875,
+              "eval/validation_tier_long_solve_rate": 0.2421875,
+              "eval/validation_solve_rate": 0.677734375,
+              "eval/validation_hard_solve_rate": 0.4296875,
+              "eval/validation_episode_return": 0.572975754737854,
+              "buffer/unique_levels": 4000.0,
+              "buffer/solvable_fraction": 0.98828125,
+              "buffer/mean_shortest_path": 10.430830039525691,
+              "buffer/mean_wall_count": 25.3125,
+              "wall_clock_time": 2665.742133180989,
+              "num_updates": 5000,
+              "eval/recent_solve_rate": 0.6458333333333334,
+              "trajectory_wall_clock_time": 2665.742133180989
+            },
+            "directory": "/mnt/f/тз тбанк/jaxued/checkpoints/pace-v2-f03-a1/0",
+            "step": 19
+          },
+          "elapsed": 2738.769429259002
+        }
+      ]
+    },
+    {
+      "id": "B00",
+      "method": "MaxMC",
+      "q": 0.75,
+      "floor": 0.2,
+      "ema": 0.95,
+      "shape": 1.0,
+      "alpha": 0.2,
+      "seed": 0,
+      "target": 5000,
+      "reason": "ACCEL на том же бюджете, schedule и validation.",
+      "parent": null,
+      "status": "COMPLETED",
+      "attempts": [
+        {
+          "folder": "/mnt/f/тз тбанк/jaxued/reports/pace_v2/runs/B00/attempt-1",
+          "run_name": "pace-v2-b00-a1",
+          "worker": [
+            26939,
+            "8275281",
+            "6b697ca1-58f5-447f-9d30-3409b76b6219"
+          ],
+          "pid": 26940,
+          "process": [
+            26940,
+            "8275292",
+            "6b697ca1-58f5-447f-9d30-3409b76b6219"
+          ],
+          "phase": "train",
+          "at": "2026-11-26T17:23:05+03:00",
+          "status": "COMPLETED",
+          "exit_code": 0,
+          "result": {
+            "metrics": {
+              "level_sampler/size": 4000.0,
+              "level_sampler/episode_count": 160000.0,
+              "level_sampler/max_score": 0.5434336066246033,
+              "level_sampler/weighted_score": 0.46128496527671814,
+              "level_sampler/mean_score": 0.28728070855140686,
+              "level_sampler/nonfinite_active_scores": 0.0,
+              "level_sampler/nonfinite_active_weights": 0.0,
+              "level_sampler/frontier_fraction": 0.0,
+              "level_sampler/frontier_weight": 0.0,
+              "level_sampler/weight_ess": 2.6580615043640137,
+              "replay/batches": 115.0,
+              "replay/max_copies": 25.0,
+              "replay/mean_batch_ess": 2.759713649749756,
+              "replay/mean_frontier_share": 0.0,
+              "replay/mean_max_copies": 19.23478126525879,
+              "replay/mean_unique_levels": 12.55652141571045,
+              "train/actor_loss": -0.00047168871969915926,
+              "train/episode_length": 21.45502281188965,
+              "train/episode_return": 0.9219549894332886,
+              "train/policy_entropy": 0.12997685372829437,
+              "train/solve_rate": 0.9919310212135315,
+              "train/value_loss": 0.012041197158396244,
+              "num_env_steps": 40960000.0,
+              "gradient_updates": 11010.0,
+              "buffer/effective_sample_size": 2.6580615043640137,
+              "eval/validation_tier_easy_solve_rate": 1.0,
+              "eval/validation_tier_medium_solve_rate": 0.90625,
+              "eval/validation_tier_hard_solve_rate": 0.71875,
+              "eval/validation_tier_long_solve_rate": 0.453125,
+              "eval/validation_solve_rate": 0.76953125,
+              "eval/validation_hard_solve_rate": 0.5859375,
+              "eval/validation_episode_return": 0.6192452907562256,
+              "buffer/unique_levels": 4000.0,
+              "buffer/solvable_fraction": 0.9921875,
+              "buffer/mean_shortest_path": 9.393700787401574,
+              "buffer/mean_wall_count": 24.734375,
+              "wall_clock_time": 969.4768338689901,
+              "num_updates": 5000,
+              "eval/recent_solve_rate": 0.75,
+              "trajectory_wall_clock_time": 969.4768338689901
+            },
+            "directory": "/mnt/f/тз тбанк/jaxued/checkpoints/pace-v2-b00-a1/0",
+            "step": 19
+          },
+          "elapsed": 1029.5258082540095
+        }
+      ]
+    },
+    {
+      "id": "LS00",
+      "method": "hybrid_pace_lite_floor",
+      "q": 0.75,
+      "floor": 0.3,
+      "ema": 0.95,
+      "shape": 1.0,
+      "alpha": 0.2,
+      "seed": 0,
+      "target": 100,
+      "reason": "CUDA smoke на полном размере rollout.",
+      "parent": null,
+      "status": "PENDING",
+      "attempts": [],
+      "study": "lite"
+    }
+  ],
+  "events": [
+    {
+      "at": "2026-11-26T12:59:29+03:00",
+      "message": "До первого запуска уточнены имена отдельных validation-категорий."
+    },
+    {
+      "at": "2026-11-26T13:09:35+03:00",
+      "message": "Старт S00, попытка 1."
+    },
+    {
+      "at": "2026-11-26T13:12:06+03:00",
+      "message": "S00 COMPLETED. "
+    },
+    {
+      "at": "2026-11-26T13:13:06+03:00",
+      "message": "Старт F01, попытка 1."
+    },
+    {
+      "at": "2026-11-26T13:57:17+03:00",
+      "message": "F01 COMPLETED. "
+    },
+    {
+      "at": "2026-11-26T13:58:25+03:00",
+      "message": "Старт F02, попытка 1."
+    },
+    {
+      "at": "2026-11-26T14:42:10+03:00",
+      "message": "F02 COMPLETED. "
+    },
+    {
+      "at": "2026-11-26T14:43:19+03:00",
+      "message": "Старт F03, попытка 1."
+    },
+    {
+      "at": "2026-11-26T15:29:10+03:00",
+      "message": "F03 COMPLETED. "
+    },
+    {
+      "at": "2026-11-26T15:29:45+03:00",
+      "message": "Срез абляции Floor на 5 000. F03 β=0.3: 67.77%, F01 β=0.2: 66.80%, F02 β=0.1: 61.72%"
+    },
+    {
+      "at": "2026-11-26T15:30:20+03:00",
+      "message": "Старт F04, попытка 1."
+    },
+    {
+      "at": "2026-11-26T16:17:22+03:00",
+      "message": "F04 COMPLETED. "
+    },
+    {
+      "at": "2026-11-26T16:18:32+03:00",
+      "message": "Старт F05, попытка 1."
+    },
+    {
+      "at": "2026-11-26T17:04:44+03:00",
+      "message": "F05 COMPLETED. "
+    },
+    {
+      "at": "2026-11-26T17:05:56+03:00",
+      "message": "Старт B00, попытка 1."
+    },
+    {
+      "at": "2026-11-26T17:23:30+03:00",
+      "message": "B00 COMPLETED. "
+    },
+    {
+      "at": "2026-11-26T17:23:36+03:00",
+      "message": "Лидер F03. Переходим к абляции Floor. Разрыв с ACCEL: 0.091796875."
+    },
+    {
+      "at": "2026-11-26T17:24:13+03:00",
+      "message": "Старт F06, попытка 1."
+    },
+    {
+      "at": "2026-11-26T18:13:12+03:00",
+      "message": "F06 COMPLETED. "
+    },
+    {
+      "at": "2026-11-26T18:14:24+03:00",
+      "message": "Старт F07, попытка 1."
+    },
+    {
+      "at": "2026-11-26T18:25:29+03:00",
+      "message": "Добавлена кампания H-PACE-Lite после уже поставленных задач."
+    },
+    {
+      "at": "2026-11-26T18:33:56+03:00",
+      "message": "F07 остановлен по запросу пользователя для освобождения GPU."
+    },
+    {
+      "at": "2026-11-26T21:54:09+03:00",
+      "message": "Добавлены полные прогоны F03 на seeds 0, 1, 2."
+    },
+    {
+      "at": "2026-11-26T21:57:22+03:00",
+      "message": "Старт F03-FULL0, попытка 1."
+    },
+    {
+      "at": "2026-11-27T01:45:54+03:00",
+      "message": "F03-FULL0 COMPLETED. "
+    },
+    {
+      "at": "2026-11-27T01:47:07+03:00",
+      "message": "Старт F03-FULL1, попытка 1."
+    },
+    {
+      "at": "2026-11-27T06:05:08+03:00",
+      "message": "F03-FULL1 COMPLETED. "
+    },
+    {
+      "at": "2026-11-27T06:06:21+03:00",
+      "message": "Старт F03-FULL2, попытка 1."
+    },
+    {
+      "at": "2026-11-27T10:20:29+03:00",
+      "message": "F03-FULL2 COMPLETED. "
+    }
+  ],
+  "winner": null,
+  "stage": "lite_search",
+  "created": "2026-11-26T12:52:11+03:00",
+  "baseline": {
+    "lr": 0.0001,
+    "max_grad_norm": 0.5,
+    "num_steps": 256,
+    "num_train_envs": 32,
+    "num_minibatches": 1,
+    "gamma": 0.995,
+    "epoch_ppo": 5,
+    "clip_eps": 0.2,
+    "gae_lambda": 0.98,
+    "entropy_coeff": 0.001,
+    "critic_coeff": 0.5,
+    "level_buffer_capacity": 4000,
+    "replay_prob": 0.8,
+    "staleness_coeff": 0.3,
+    "temperature": 0.3,
+    "topk_k": 4,
+    "minimum_fill_ratio": 0.5,
+    "prioritization": "rank",
+    "num_edits": 5,
+    "agent_view_size": 5,
+    "n_walls": 25
+  },
+  "git_commit": "c332ab0b1ebae9a8da6793da58272099b3cf712f",
+  "source": {
+    "examples/maze_plr.py": "a8837d36a6001e00e56e8580f357337547d23fa61a34a3c3d7eddd6d3691c90a",
+    "src/jaxued/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/jaxued/adaptive_mutation.py": "04c30708e400d3eaa830d7260e779e8401a8fc56922e5ac5bb755fdb4fc5c382",
+    "src/jaxued/environments/__init__.py": "11ec7a5cbb3abcb39d470f9dc4907fd236a037a93e0daa9a36c19decd9617708",
+    "src/jaxued/environments/gymnax/acrobot.py": "7a203337a62ba153a04c20a0eba26a272161050d55599c3e3ffab74fd738434e",
+    "src/jaxued/environments/gymnax/cartpole.py": "6e94e9f2778db3fada0e088e30bbed9e96dcef2edc4c2cc64e1e1f026c2b9eb7",
+    "src/jaxued/environments/gymnax/pendulum.py": "77de4732b5110f8c5df7e71466447cb248c14fd0cf6fa95ae5f66959d7acf997",
+    "src/jaxued/environments/maze/__init__.py": "8522564e30bc0d12b8dc3604447276a7b666f6304627394fa23d1f054c299f9d",
+    "src/jaxued/environments/maze/env.py": "046712a9e1226ce7c2b9c28e0aa294d940d64e8f713f928e375b49b619c14c14",
+    "src/jaxued/environments/maze/env_editor.py": "fc8f2b560dcb130dcd0459226d298927c77a37a598710ec9dd02aacabd3365a3",
+    "src/jaxued/environments/maze/env_solved.py": "59e24d56aa1c4de0f513705007bd23d3ec9ab882aec62b8605f069ab2f5ac93f",
+    "src/jaxued/environments/maze/level.py": "de3ea0e9502d6328bbc6f27397860de24cffe20747b18c0a960b879ddbae5469",
+    "src/jaxued/environments/maze/renderer.py": "80946d07c40a3e4907d73459f0dd5a3f5fc4e884044bffa0d721576da406b61f",
+    "src/jaxued/environments/maze/util.py": "95608f1e9905ed032a6ee97eff709a3143f6712e45628eec4331f5e27f5a15fa",
+    "src/jaxued/environments/underspecified_env.py": "004163ae42327f4c2a90bc5beaf74f7d5073a46ee32526bdd9e50617b8b80834",
+    "src/jaxued/hybrid_teacher.py": "74fcaff1f062a915543a9ba12760ff5c11f92598d41cbfa2c783a6b4331025c6",
+    "src/jaxued/learnability.py": "9bcee7aeb05f6b9838e99509748932dcd5d25ef5f438f1b68f0f303b04390618",
+    "src/jaxued/level_sampler.py": "11599a3898517e264c281c3908c8af21fb4ff3d75fe2b85e6fcc09b8658d0325",
+    "src/jaxued/linen.py": "634db4a494dac2cf638b2da320bccae4bd6a2c3a737939a7d349792b761b83ca",
+    "src/jaxued/map_elites.py": "586548bbcc75f53310ff34eea553d5bb255f626edfcf8de456e1330ff536e71f",
+    "src/jaxued/mutation_checkpoint.py": "24bcde626b166485c887aaa759968f6a908f60c097b47bd3118ee4847de6812d",
+    "src/jaxued/pace_adaptive.py": "7357480f1a13d8e12ad1e715e33aee6ede57b5dd69a04899de372d2a2eb19f20",
+    "src/jaxued/pace_score.py": "ec3a1a2502aac8838f4749474c05129f9baeebb1358ff7a6803af44088c1c235",
+    "src/jaxued/pace_shadow.py": "551f9aab3f39e5d1f0f8d9f6c90829127ea7e9c38378d6721fce3e7096983fed",
+    "src/jaxued/pace_validation.py": "0f30b5999e46957596fb336b449787b2a17c336ab5c594b84cde28de04231526",
+    "src/jaxued/teacher_experiments.py": "e3e7b4bf3cab567f99bce452df8d385768b6c48fbbe1e92e529124234fa165e7",
+    "src/jaxued/teacher_parity.py": "0d6f3e33e0db5bc7f8e8c600265cc08dd74611d61510a53ce077944bffceca34",
+    "src/jaxued/utils.py": "3b73c0b28d8b6878162adb9026d880b3a8c1195c305ada6e8d7e7d055145c714",
+    "src/jaxued/wrappers/__init__.py": "011768ba12db2f2f153783cd0269b2745c6f670b8cdb1118a49076ca73f8aec7",
+    "src/jaxued/wrappers/autoreplay.py": "a5a3be9d65b9d7b8e84d1de6d03c1dd986f4cb024f3a51dfa5b6b2261203c7b1",
+    "src/jaxued/wrappers/autoreset.py": "65c1616c8f97930576aebd342b55763ddab7725d3201201f62d58abb415e992d"
+  },
+  "validation": {
+    "seed": 921572,
+    "eval_seed": 65899,
+    "attempts": 4,
+    "sha256": "f9faef9dbc883fd860157a3b0db388964f3e0a9b2a8810aaa31384890ad57c0e",
+    "tiers": {
+      "easy": 32,
+      "medium": 32,
+      "hard": 32,
+      "long": 32
+    }
+  },
+  "runner": {
+    "pid": 35060,
+    "identity": [
+      35060,
+      "10004497",
+      "6b697ca1-58f5-447f-9d30-3409b76b6219"
+    ],
+    "at": "2026-11-26T21:54:09+03:00"
+  },
+  "gpu": "GPU GPU-db1de265-f8af-c2f0-e857-6a7e7676d5dc, 6698 MiB свободно, GPU util 0%",
+  "updated": "2026-11-27T18:15:10+03:00",
+  "floor_reviewed": true,
+  "lite_source": {
+    "examples/maze_plr.py": "6d3db25f47314539ea089e658d4ade82def97310d026adc09277dffaeb3fabcf",
+    "examples/pace_lite_profile.py": "776d33a8dee8eb5b7f672c631e3c6423cff6d59c09d0b49226e23ad1ba10e9d8",
+    "src/jaxued/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "src/jaxued/adaptive_mutation.py": "04c30708e400d3eaa830d7260e779e8401a8fc56922e5ac5bb755fdb4fc5c382",
+    "src/jaxued/environments/__init__.py": "11ec7a5cbb3abcb39d470f9dc4907fd236a037a93e0daa9a36c19decd9617708",
+    "src/jaxued/environments/gymnax/acrobot.py": "7a203337a62ba153a04c20a0eba26a272161050d55599c3e3ffab74fd738434e",
+    "src/jaxued/environments/gymnax/cartpole.py": "6e94e9f2778db3fada0e088e30bbed9e96dcef2edc4c2cc64e1e1f026c2b9eb7",
+    "src/jaxued/environments/gymnax/pendulum.py": "77de4732b5110f8c5df7e71466447cb248c14fd0cf6fa95ae5f66959d7acf997",
+    "src/jaxued/environments/maze/__init__.py": "8522564e30bc0d12b8dc3604447276a7b666f6304627394fa23d1f054c299f9d",
+    "src/jaxued/environments/maze/env.py": "046712a9e1226ce7c2b9c28e0aa294d940d64e8f713f928e375b49b619c14c14",
+    "src/jaxued/environments/maze/env_editor.py": "fc8f2b560dcb130dcd0459226d298927c77a37a598710ec9dd02aacabd3365a3",
+    "src/jaxued/environments/maze/env_solved.py": "59e24d56aa1c4de0f513705007bd23d3ec9ab882aec62b8605f069ab2f5ac93f",
+    "src/jaxued/environments/maze/level.py": "de3ea0e9502d6328bbc6f27397860de24cffe20747b18c0a960b879ddbae5469",
+    "src/jaxued/environments/maze/renderer.py": "80946d07c40a3e4907d73459f0dd5a3f5fc4e884044bffa0d721576da406b61f",
+    "src/jaxued/environments/maze/util.py": "95608f1e9905ed032a6ee97eff709a3143f6712e45628eec4331f5e27f5a15fa",
+    "src/jaxued/environments/underspecified_env.py": "004163ae42327f4c2a90bc5beaf74f7d5073a46ee32526bdd9e50617b8b80834",
+    "src/jaxued/hybrid_teacher.py": "74fcaff1f062a915543a9ba12760ff5c11f92598d41cbfa2c783a6b4331025c6",
+    "src/jaxued/learnability.py": "9bcee7aeb05f6b9838e99509748932dcd5d25ef5f438f1b68f0f303b04390618",
+    "src/jaxued/level_sampler.py": "11599a3898517e264c281c3908c8af21fb4ff3d75fe2b85e6fcc09b8658d0325",
+    "src/jaxued/linen.py": "634db4a494dac2cf638b2da320bccae4bd6a2c3a737939a7d349792b761b83ca",
+    "src/jaxued/map_elites.py": "586548bbcc75f53310ff34eea553d5bb255f626edfcf8de456e1330ff536e71f",
+    "src/jaxued/mutation_checkpoint.py": "24bcde626b166485c887aaa759968f6a908f60c097b47bd3118ee4847de6812d",
+    "src/jaxued/pace_adaptive.py": "a2eeb762ee817f472044b544f1dccf868aee83e025380c445b00f4c470067c37",
+    "src/jaxued/pace_lite.py": "50189af2066908e3209a2ff4ada226f2087e2f7ce2576144f126e8f8f7334c10",
+    "src/jaxued/pace_score.py": "ec3a1a2502aac8838f4749474c05129f9baeebb1358ff7a6803af44088c1c235",
+    "src/jaxued/pace_shadow.py": "551f9aab3f39e5d1f0f8d9f6c90829127ea7e9c38378d6721fce3e7096983fed",
+    "src/jaxued/pace_validation.py": "0f30b5999e46957596fb336b449787b2a17c336ab5c594b84cde28de04231526",
+    "src/jaxued/teacher_experiments.py": "e3e7b4bf3cab567f99bce452df8d385768b6c48fbbe1e92e529124234fa165e7",
+    "src/jaxued/teacher_parity.py": "0d6f3e33e0db5bc7f8e8c600265cc08dd74611d61510a53ce077944bffceca34",
+    "src/jaxued/utils.py": "3b73c0b28d8b6878162adb9026d880b3a8c1195c305ada6e8d7e7d055145c714",
+    "src/jaxued/wrappers/__init__.py": "011768ba12db2f2f153783cd0269b2745c6f670b8cdb1118a49076ca73f8aec7",
+    "src/jaxued/wrappers/autoreplay.py": "a5a3be9d65b9d7b8e84d1de6d03c1dd986f4cb024f3a51dfa5b6b2261203c7b1",
+    "src/jaxued/wrappers/autoreset.py": "65c1616c8f97930576aebd342b55763ddab7725d3201201f62d58abb415e992d"
+  }
+}

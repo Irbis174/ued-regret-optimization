@@ -170,3 +170,13 @@ results
 tbank_reference/
 run_5_ued_2000_wsl.sh
 run_all_ued_wsl.sh
+
+# Local editor and operating-system files
+.DS_Store
+Thumbs.db
+Desktop.ini
+/.idea/workspace.xml
+*.swp
+*.swo
+.ruff_cache/
+/examples/maze_dr.py.bak

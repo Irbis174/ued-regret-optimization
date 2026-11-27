@@ -1,0 +1,77 @@
+{
+  "device": "TFRT_CPU_0",
+  "rounds_checkpoint": 5000,
+  "envs": 32,
+  "steps": 256,
+  "repeat": 2,
+  "stages": {
+    "rollout": {
+      "compile_s": 3.655872643008479,
+      "median_ms": 372.4883419999969
+    },
+    "rollout_with_actor_head": {
+      "compile_s": 2.9338588870014064,
+      "median_ms": 327.94457499403507
+    },
+    "maxmc": {
+      "compile_s": 0.15617471300356556,
+      "median_ms": 0.04291599179850891
+    },
+    "pace_pg": {
+      "compile_s": 3.042781014999491,
+      "median_ms": 6321.083270493546
+    },
+    "pace_lite": {
+      "compile_s": 0.505574554001214,
+      "median_ms": 2.4246029934147373
+    },
+    "threshold_and_common_percentiles": {
+      "compile_s": 0.5963055869942764,
+      "median_ms": 4.088431000127457
+    },
+    "replay_sampling": {
+      "compile_s": 0.7146280970046064,
+      "median_ms": 3.3617610024521127
+    },
+    "buffer_insertion": {
+      "compile_s": 0.6680291999946348,
+      "median_ms": 15.876464000029955
+    },
+    "ppo": {
+      "compile_s": 7.840923224997823,
+      "median_ms": 4008.24988950626
+    },
+    "validation": {
+      "compile_s": 1.9936744599981466,
+      "median_ms": 2681.58523949387
+    }
+  },
+  "scores": {
+    "maxmc_vs_lite": {
+      "pearson": 0.3136413097381592,
+      "spearman": 0.4127565982404692,
+      "top_k": 8,
+      "overlap": 2
+    },
+    "maxmc_vs_pace": {
+      "pearson": 0.12991848587989807,
+      "spearman": 0.28665689149560114,
+      "top_k": 8,
+      "overlap": 3
+    },
+    "pace_vs_lite": {
+      "pearson": 0.5653563737869263,
+      "spearman": 0.6726539589442815,
+      "top_k": 8,
+      "overlap": 4
+    }
+  },
+  "memory": null,
+  "rollout_env_steps_per_s": 21992.634604387345,
+  "gradients": {
+    "max_abs_error": 7.450580596923828e-08,
+    "relative_l2_error": 3.03445148119863e-07,
+    "cosine": 1.0,
+    "max_squared_norm_error": 1.1920928955078125e-07
+  }
+}

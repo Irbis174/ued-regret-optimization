@@ -123,6 +123,24 @@ See `examples/gymnax/gymnax_plr.py` to run gymnax environments, currently suppor
 
 The `examples/gymnax/gymnax_plr.py` can be modified to add additional environments as well.
 
+## PACE-Adaptive-Floor research
+
+The Maze ACCEL trainer supports `--score_function pace_adaptive_floor`, a replay score that favors actor-gradient norms around a running quantile. The experimental teacher also includes a no-floor ablation and a MaxMC hybrid. The validation queue keeps a 30,000-round learning-rate horizon and saves full training state at the 5,000-round selection point.
+
+On Ubuntu or WSL, prepare the snapshot once and start or reattach the local queue with:
+
+```bash
+.venv/bin/python examples/pace_research_queue.py --freeze
+bash examples/launch_pace_research.sh
+```
+
+See [the protocol and audit](reports/pace_v2/research.md) and [the live status](reports/pace_v2/progress.md).
+
+H-PACE-Lite is available as `--score_function hybrid_pace_lite_floor --pace_floor_weight 0.30 --hybrid_pace_weight 0.20`.
+The gradient score uses the existing actor forward pass and an analytic last-layer gradient.
+The Lite campaign reuses B00 and F03 and runs under the same sequential scheduler.
+See [Lite experiment status](reports/hybrid_pace_lite/progress.md) and [T-Bank protocol checks](reports/hybrid_pace_lite/tbank_compliance.md).
+
 ## See Also
 Here are some other libraries that also leverage Jax to obtain massive speedups in RL, which acted as inspiration for JaxUED.
 

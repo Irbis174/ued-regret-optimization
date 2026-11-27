@@ -1,0 +1,12 @@
+{
+  "seed": 921572,
+  "eval_seed": 65899,
+  "attempts": 4,
+  "sha256": "f9faef9dbc883fd860157a3b0db388964f3e0a9b2a8810aaa31384890ad57c0e",
+  "tiers": {
+    "easy": 32,
+    "medium": 32,
+    "hard": 32,
+    "long": 32
+  }
+}
