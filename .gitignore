@@ -160,8 +160,31 @@ cython_debug/
 #.idea/
 
 wandb
-checkpoints
 results
+
+# Keep all experiment checkpoints local except the six final submissions.
+checkpoints/
+!/checkpoints/
+/checkpoints/*
+!/checkpoints/accel-s0/
+!/checkpoints/accel-s1/
+!/checkpoints/accel-s2-20261126-024609/
+!/checkpoints/pace-v2-f03-full0-a1/
+!/checkpoints/pace-v2-f03-full1-a1/
+!/checkpoints/pace-v2-f03-full2-a1/
+/checkpoints/*/*
+!/checkpoints/accel-s0/0/
+!/checkpoints/accel-s1/1/
+!/checkpoints/accel-s2-20261126-024609/2/
+!/checkpoints/pace-v2-f03-full0-a1/0/
+!/checkpoints/pace-v2-f03-full1-a1/1/
+!/checkpoints/pace-v2-f03-full2-a1/2/
+/checkpoints/*/*/*
+!/checkpoints/*/*/config.json
+!/checkpoints/*/*/models/
+/checkpoints/*/*/models/*
+!/checkpoints/*/*/models/119/
+
 
 # Local Markdown notes and experiment reports
 *.md
